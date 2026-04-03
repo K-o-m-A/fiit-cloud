@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourorg/autoscaler-operator/pkg/metrics"
-	"github.com/yourorg/autoscaler-operator/pkg/scaler"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/metrics"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/scaler"
 )
 
 var baseNow = time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)

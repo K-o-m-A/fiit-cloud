@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourorg/autoscaler-operator/pkg/metrics"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/metrics"
 )
 
 // Direction is the outcome of an Evaluate call.

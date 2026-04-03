@@ -18,8 +18,8 @@ import (
 	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	"github.com/yourorg/autoscaler-operator/pkg/metrics"
-	"github.com/yourorg/autoscaler-operator/pkg/scaler"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/metrics"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/scaler"
 )
 
 // Options are passed from main to SetupWithManager.

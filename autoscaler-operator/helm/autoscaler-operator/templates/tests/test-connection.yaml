@@ -11,5 +11,5 @@ spec:
     - name: wget
       image: busybox
       command: ['wget']
-      args: ['{{ include "autoscaler-operator.fullname" . }}:{{ .Values.service.port }}']
+      args: ['{{ include "autoscaler-operator.serviceName" . }}:{{ .Values.service.port }}']
   restartPolicy: Never

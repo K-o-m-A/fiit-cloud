@@ -5,9 +5,7 @@ metadata:
   labels:
     {{- include "autoscaler-operator.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   selector:
     matchLabels:
       {{- include "autoscaler-operator.selectorLabels" . | nindent 6 }}
@@ -33,15 +31,20 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: {{ .Chart.Name }}
+        - name: operator
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --watch-namespace={{ .Values.controller.watchNamespace }}
+            - --sync-period={{ .Values.controller.syncPeriod }}
+            - --metrics-bind-address={{ .Values.controller.metricsBindAddress }}
+            - --leader-elect={{ .Values.controller.leaderElect }}
           ports:
-            - name: http
+            - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           {{- with .Values.livenessProbe }}

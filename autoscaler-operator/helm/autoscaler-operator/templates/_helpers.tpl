@@ -60,3 +60,10 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Service name for metrics endpoint.
+*/}}
+{{- define "autoscaler-operator.serviceName" -}}
+{{- printf "%s-metrics" (include "autoscaler-operator.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}

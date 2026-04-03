@@ -14,7 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
-	"github.com/yourorg/autoscaler-operator/pkg/controller"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/controller"
 )
 
 func main() {
