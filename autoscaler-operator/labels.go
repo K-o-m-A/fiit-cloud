@@ -53,22 +53,4 @@ const (
 
 	// AnnotationMemEnabled enables/disables memory-based scaling. Default: "true".
 	AnnotationMemEnabled = "autoscaler.yourorg.io/mem-enabled"
-
-	// --- RPS thresholds (requests per second per pod) ---
-
-	// AnnotationRPSScaleUp triggers a scale-up when RPS per pod exceeds this value. Default: "100".
-	AnnotationRPSScaleUp = "autoscaler.yourorg.io/rps-scale-up-threshold"
-
-	// AnnotationRPSScaleDown triggers a scale-down when RPS per pod falls below this value. Default: "10".
-	AnnotationRPSScaleDown = "autoscaler.yourorg.io/rps-scale-down-threshold"
-
-	// AnnotationRPSEnabled enables/disables RPS-based scaling. Default: "false"
-	// (requires Prometheus). Explicitly set to "true" to enable.
-	AnnotationRPSEnabled = "autoscaler.yourorg.io/rps-enabled"
-
-	// AnnotationRPSQuery is an optional custom PromQL query that returns total RPS for the
-	// Deployment. Must return a single scalar. If unset, the operator uses the built-in
-	// query based on the deployment name and namespace.
-	//   Example: sum(rate(http_requests_total{deployment="my-app"}[2m]))
-	AnnotationRPSQuery = "autoscaler.yourorg.io/rps-promql"
 )

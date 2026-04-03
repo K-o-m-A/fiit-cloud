@@ -19,11 +19,10 @@ import (
 
 func main() {
 	var (
-		watchNamespace    string
-		syncPeriod        time.Duration
-		metricsBindAddr   string
-		prometheusURL     string
-		leaderElect       bool
+		watchNamespace  string
+		syncPeriod      time.Duration
+		metricsBindAddr string
+		leaderElect     bool
 	)
 
 	flag.StringVar(&watchNamespace, "watch-namespace", "",
@@ -32,8 +31,6 @@ func main() {
 		"How often the controller re-evaluates scaling decisions.")
 	flag.StringVar(&metricsBindAddr, "metrics-bind-address", ":8080",
 		"Address for the controller-runtime metrics endpoint.")
-	flag.StringVar(&prometheusURL, "prometheus-url", "http://prometheus-server.monitoring.svc.cluster.local:9090",
-		"Prometheus base URL used to query RPS metrics.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for high-availability deployments.")
 
@@ -52,11 +49,11 @@ func main() {
 
 	sp := syncPeriod
 	mgr, err := manager.New(cfg, manager.Options{
-		Namespace:               watchNamespace,
-		MetricsBindAddress:      metricsBindAddr,
-		LeaderElection:          leaderElect,
-		LeaderElectionID:        "autoscaler-operator-leader",
-		SyncPeriod:              &sp,
+		Namespace:          watchNamespace,
+		MetricsBindAddress: metricsBindAddr,
+		LeaderElection:     leaderElect,
+		LeaderElectionID:   "autoscaler-operator-leader",
+		SyncPeriod:         &sp,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")
@@ -78,8 +75,7 @@ func main() {
 	}
 
 	if err := controller.SetupWithManager(mgr, controller.Options{
-		PrometheusURL: prometheusURL,
-		SyncPeriod:    syncPeriod,
+		SyncPeriod: syncPeriod,
 	}); err != nil {
 		setupLog.Error(err, "unable to setup autoscaler controller")
 		os.Exit(1)
@@ -88,7 +84,6 @@ func main() {
 	setupLog.Info("starting autoscaler operator",
 		"watchNamespace", watchNamespace,
 		"syncPeriod", syncPeriod,
-		"prometheusURL", prometheusURL,
 	)
 
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {

@@ -15,9 +15,9 @@ import (
 type Direction int
 
 const (
-	Hold     Direction = iota // No change needed.
-	ScaleUp                   // Increase replicas.
-	ScaleDown                 // Decrease replicas.
+	Hold      Direction = iota // No change needed.
+	ScaleUp                    // Increase replicas.
+	ScaleDown                  // Decrease replicas.
 )
 
 func (d Direction) String() string {
@@ -44,9 +44,9 @@ func (r Reason) String() string {
 
 // Decision is the fully resolved output of Evaluate.
 type Decision struct {
-	Direction      Direction
+	Direction       Direction
 	DesiredReplicas int32
-	Reasons        []Reason
+	Reasons         []Reason
 }
 
 func (d Decision) String() string {
@@ -63,7 +63,7 @@ func (d Decision) String() string {
 // Input bundles everything Evaluate needs.
 type Input struct {
 	// Current state
-	CurrentReplicas int32
+	CurrentReplicas   int32
 	LastScaleUpTime   time.Time
 	LastScaleDownTime time.Time
 
@@ -85,10 +85,6 @@ type Input struct {
 	MemEnabled      bool
 	MemScaleUpPct   int32
 	MemScaleDownPct int32
-
-	RPSEnabled         bool
-	RPSScaleUpPerPod   float64
-	RPSScaleDownPerPod float64
 
 	// Observed values (use -1 to signal "not available")
 	Snapshot *metrics.DeploymentSnapshot
@@ -120,9 +116,9 @@ func Evaluate(in Input) Decision {
 	}
 
 	var (
-		scaleUpReasons   []Reason
-		belowDownCount   int
-		activeMetrics    int
+		scaleUpReasons []Reason
+		belowDownCount int
+		activeMetrics  int
 	)
 
 	// --- CPU ---
@@ -157,22 +153,6 @@ func Evaluate(in Input) Decision {
 		}
 	}
 
-	// --- RPS ---
-	if in.RPSEnabled && snap.TotalRPS >= 0 {
-		activeMetrics++
-		rpsPerPod := snap.RPSPerPod()
-		switch {
-		case rpsPerPod >= in.RPSScaleUpPerPod:
-			scaleUpReasons = append(scaleUpReasons, Reason{
-				Metric:    "RPS",
-				Observed:  fmt.Sprintf("%.1f rps/pod", rpsPerPod),
-				Threshold: fmt.Sprintf(">=%.1f rps/pod", in.RPSScaleUpPerPod),
-			})
-		case rpsPerPod < in.RPSScaleDownPerPod:
-			belowDownCount++
-		}
-	}
-
 	// --- Scale UP decision ---
 	if len(scaleUpReasons) > 0 {
 		if in.CurrentReplicas >= in.MaxReplicas {
@@ -184,8 +164,8 @@ func Evaluate(in Input) Decision {
 			if in.Now.Before(cooldownEnd) {
 				return Decision{Direction: Hold, DesiredReplicas: in.CurrentReplicas,
 					Reasons: append(scaleUpReasons, Reason{
-						Metric:   "cooldown",
-						Observed: "scale-up cooldown active",
+						Metric:    "cooldown",
+						Observed:  "scale-up cooldown active",
 						Threshold: fmt.Sprintf("ends at %s", cooldownEnd.Format(time.RFC3339)),
 					})}
 			}
@@ -204,8 +184,8 @@ func Evaluate(in Input) Decision {
 			if in.Now.Before(cooldownEnd) {
 				return Decision{Direction: Hold, DesiredReplicas: in.CurrentReplicas,
 					Reasons: []Reason{{
-						Metric:   "cooldown",
-						Observed: "scale-down cooldown active",
+						Metric:    "cooldown",
+						Observed:  "scale-down cooldown active",
 						Threshold: fmt.Sprintf("ends at %s", cooldownEnd.Format(time.RFC3339)),
 					}}}
 			}

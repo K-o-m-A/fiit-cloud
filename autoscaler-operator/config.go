@@ -19,18 +19,13 @@ type DeploymentConfig struct {
 	ScaleUpCooldownSec   int64
 	ScaleDownCooldownSec int64
 
-	CPUEnabled         bool
-	CPUScaleUpPct      int32
-	CPUScaleDownPct    int32
+	CPUEnabled      bool
+	CPUScaleUpPct   int32
+	CPUScaleDownPct int32
 
-	MemEnabled         bool
-	MemScaleUpPct      int32
-	MemScaleDownPct    int32
-
-	RPSEnabled        bool
-	RPSScaleUpPerPod  float64
-	RPSScaleDownPerPod float64
-	RPSPromQL         string // empty = use built-in query
+	MemEnabled      bool
+	MemScaleUpPct   int32
+	MemScaleDownPct int32
 }
 
 // ParseDeploymentConfig reads annotations from a Deployment and returns the
@@ -56,11 +51,6 @@ func ParseDeploymentConfig(d *appsv1.Deployment) (*DeploymentConfig, error) {
 		MemEnabled:      getBool(ann, AnnotationMemEnabled, true),
 		MemScaleUpPct:   getInt32(ann, AnnotationMemScaleUp, 80),
 		MemScaleDownPct: getInt32(ann, AnnotationMemScaleDown, 20),
-
-		RPSEnabled:         getBool(ann, AnnotationRPSEnabled, false),
-		RPSScaleUpPerPod:   getFloat64(ann, AnnotationRPSScaleUp, 100),
-		RPSScaleDownPerPod: getFloat64(ann, AnnotationRPSScaleDown, 10),
-		RPSPromQL:          ann[AnnotationRPSQuery],
 	}
 
 	if err := cfg.validate(d.Name); err != nil {
@@ -84,10 +74,6 @@ func (c *DeploymentConfig) validate(name string) error {
 	if c.MemEnabled && c.MemScaleDownPct >= c.MemScaleUpPct {
 		return fmt.Errorf("deployment %q: memory scaleDown threshold (%d) must be < scaleUp (%d)",
 			name, c.MemScaleDownPct, c.MemScaleUpPct)
-	}
-	if c.RPSEnabled && c.RPSScaleDownPerPod >= c.RPSScaleUpPerPod {
-		return fmt.Errorf("deployment %q: RPS scaleDown threshold (%.1f) must be < scaleUp (%.1f)",
-			name, c.RPSScaleDownPerPod, c.RPSScaleUpPerPod)
 	}
 	return nil
 }
@@ -116,18 +102,6 @@ func getInt64(ann map[string]string, key string, def int64) int64 {
 		return def
 	}
 	return i
-}
-
-func getFloat64(ann map[string]string, key string, def float64) float64 {
-	v, ok := ann[key]
-	if !ok {
-		return def
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return def
-	}
-	return f
 }
 
 func getBool(ann map[string]string, key string, def bool) bool {

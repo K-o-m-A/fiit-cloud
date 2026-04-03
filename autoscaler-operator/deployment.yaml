@@ -44,7 +44,6 @@ spec:
             - --watch-namespace=          # empty = watch all namespaces
             - --sync-period=30s
             - --metrics-bind-address=:8080
-            - --prometheus-url=http://prometheus-server.monitoring.svc.cluster.local:9090
             - --leader-elect=true
           ports:
             - name: metrics

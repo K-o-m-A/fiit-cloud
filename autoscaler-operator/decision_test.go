@@ -25,13 +25,11 @@ func baseInput() scaler.Input {
 		MemEnabled:           true,
 		MemScaleUpPct:        80,
 		MemScaleDownPct:      20,
-		RPSEnabled:           false,
 		Now:                  baseNow,
 		Snapshot: &metrics.DeploymentSnapshot{
 			PodCount:             2,
 			AvgCPUUtilizationPct: 40,
 			AvgMemUtilizationPct: 40,
-			TotalRPS:             -1,
 		},
 	}
 }
@@ -62,21 +60,6 @@ func TestScaleUp_CPUHigh(t *testing.T) {
 func TestScaleUp_MemHigh(t *testing.T) {
 	in := baseInput()
 	in.Snapshot.AvgMemUtilizationPct = 85
-	d := scaler.Evaluate(in)
-	if d.Direction != scaler.ScaleUp {
-		t.Errorf("expected ScaleUp, got %s: %s", d.Direction, d)
-	}
-}
-
-func TestScaleUp_RPSHigh(t *testing.T) {
-	in := baseInput()
-	in.CPUEnabled = false
-	in.MemEnabled = false
-	in.RPSEnabled = true
-	in.RPSScaleUpPerPod = 100
-	in.RPSScaleDownPerPod = 10
-	// 250 total / 2 pods = 125 rps/pod > 100 threshold
-	in.Snapshot.TotalRPS = 250
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.ScaleUp {
 		t.Errorf("expected ScaleUp, got %s: %s", d.Direction, d)
@@ -153,7 +136,7 @@ func TestScaleDown_AllMetricsLow(t *testing.T) {
 func TestScaleDown_OnlyOneLow_NoAction(t *testing.T) {
 	in := baseInput()
 	in.Snapshot.AvgCPUUtilizationPct = 10 // low
-	in.Snapshot.AvgMemUtilizationPct = 50  // normal
+	in.Snapshot.AvgMemUtilizationPct = 50 // normal
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.Hold {
 		t.Errorf("expected Hold (mixed metrics), got %s", d.Direction)
@@ -194,7 +177,7 @@ func TestNoSnapshot_Hold(t *testing.T) {
 func TestMixedMetrics_CPUHighMemLow_ScalesUp(t *testing.T) {
 	in := baseInput()
 	in.Snapshot.AvgCPUUtilizationPct = 90 // triggers scale-up
-	in.Snapshot.AvgMemUtilizationPct = 5   // would trigger scale-down alone
+	in.Snapshot.AvgMemUtilizationPct = 5  // would trigger scale-down alone
 	d := scaler.Evaluate(in)
 	// Scale-up takes precedence over scale-down
 	if d.Direction != scaler.ScaleUp {

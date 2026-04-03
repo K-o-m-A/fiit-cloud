@@ -33,15 +33,6 @@ metadata:
     autoscaler.yourorg.io/mem-scale-up-threshold: "80"
     autoscaler.yourorg.io/mem-scale-down-threshold: "30"
 
-    # ── RPS thresholds (requires Prometheus) ─────────────────────────────
-    autoscaler.yourorg.io/rps-enabled: "true"
-    autoscaler.yourorg.io/rps-scale-up-threshold: "200"   # scale up  when > 200 rps/pod
-    autoscaler.yourorg.io/rps-scale-down-threshold: "20"  # scale down when < 20  rps/pod
-
-    # Optional: override the built-in PromQL query.
-    # autoscaler.yourorg.io/rps-promql: |
-    #   sum(rate(http_requests_total{job="my-web-api"}[2m]))
-
 spec:
   replicas: 2
   selector:

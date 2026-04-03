@@ -24,8 +24,7 @@ import (
 
 // Options are passed from main to SetupWithManager.
 type Options struct {
-	PrometheusURL string
-	SyncPeriod    time.Duration
+	SyncPeriod time.Duration
 }
 
 // DeploymentReconciler reconciles Deployments that carry the autoscaler opt-in label.
@@ -43,7 +42,7 @@ type DeploymentReconciler struct {
 func SetupWithManager(mgr manager.Manager, opts Options) error {
 	r := &DeploymentReconciler{
 		client:         mgr.GetClient(),
-		collector:      metrics.New(mgr.GetClient(), opts.PrometheusURL),
+		collector:      metrics.New(mgr.GetClient()),
 		scaleUpTimes:   make(map[string]time.Time),
 		scaleDownTimes: make(map[string]time.Time),
 	}
@@ -96,7 +95,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	logger.V(1).Info("resolved config",
 		"min", cfg.MinReplicas, "max", cfg.MaxReplicas,
 		"cpuEnabled", cfg.CPUEnabled, "memEnabled", cfg.MemEnabled,
-		"rpsEnabled", cfg.RPSEnabled,
 	)
 
 	// --- 3. Collect metrics ---
@@ -109,9 +107,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		ctx,
 		req.Namespace,
 		podSelector,
-		cfg.RPSEnabled,
-		cfg.RPSPromQL,
-		dep.Name,
 	)
 	if metricsErr != nil {
 		// Log but continue; we may still be able to make a decision with partial data.
@@ -127,7 +122,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		"pods", snap.PodCount,
 		"avgCPU", snap.AvgCPUUtilizationPct,
 		"avgMem", snap.AvgMemUtilizationPct,
-		"totalRPS", snap.TotalRPS,
 	)
 
 	// --- 4. Make scaling decision ---
@@ -153,9 +147,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		MemEnabled:           cfg.MemEnabled,
 		MemScaleUpPct:        cfg.MemScaleUpPct,
 		MemScaleDownPct:      cfg.MemScaleDownPct,
-		RPSEnabled:           cfg.RPSEnabled,
-		RPSScaleUpPerPod:     cfg.RPSScaleUpPerPod,
-		RPSScaleDownPerPod:   cfg.RPSScaleDownPerPod,
 		Snapshot:             snap,
 		Now:                  time.Now(),
 	})

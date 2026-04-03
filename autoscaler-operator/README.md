@@ -1,8 +1,7 @@
 # autoscaler-operator
 
 A lightweight Kubernetes operator written in Go that automatically scales
-labeled Deployments based on **CPU utilisation**, **memory utilisation**, and
-**request rate (RPS via Prometheus)**.
+labeled Deployments based on **CPU utilisation** and **memory utilisation**.
 
 ## How it works
 
@@ -11,7 +10,6 @@ Deployment (labeled)
        │
        ▼
   Reconciler  ──── Kubernetes Metrics Server ──► CPU / Memory %
-       │       └── Prometheus  ─────────────────► RPS
        │
        ▼
   Scaler (pure logic, fully tested)
@@ -47,10 +45,6 @@ metadata:
     autoscaler.yourorg.io/mem-scale-up-threshold:   "80"
     autoscaler.yourorg.io/mem-scale-down-threshold: "30"
 
-    # RPS per pod (requires Prometheus)
-    autoscaler.yourorg.io/rps-enabled:              "true"
-    autoscaler.yourorg.io/rps-scale-up-threshold:   "200"
-    autoscaler.yourorg.io/rps-scale-down-threshold: "20"
 ```
 
 Full annotation reference: [`pkg/controller/labels.go`](pkg/controller/labels.go)
@@ -78,7 +72,6 @@ Full annotation reference: [`pkg/controller/labels.go`](pkg/controller/labels.go
 | Component | Purpose |
 |-----------|---------|
 | Kubernetes Metrics Server | CPU & Memory data |
-| Prometheus (optional) | RPS data (`rps-enabled: "true"`) |
 
 ---
 
@@ -106,44 +99,8 @@ make logs
 |------|---------|-------------|
 | `--watch-namespace` | `""` (all) | Restrict to a single namespace |
 | `--sync-period` | `30s` | How often the controller re-evaluates |
-| `--prometheus-url` | `http://prometheus-server…:9090` | Prometheus base URL |
 | `--leader-elect` | `false` | Enable HA leader election |
 | `--metrics-bind-address` | `:8080` | Controller-runtime metrics endpoint |
 
 ---
 
-## Running tests
-
-```bash
-make test
-```
-
-The scaler decision engine (`pkg/scaler`) has no Kubernetes dependencies and
-is covered by table-driven unit tests.
-
----
-
-## Project layout
-
-```
-.
-├── cmd/operator/        # main()  – wires up the manager
-├── pkg/
-│   ├── controller/
-│   │   ├── labels.go    # all annotation/label key constants
-│   │   ├── config.go    # annotation parser + validation
-│   │   └── reconciler.go# controller-runtime Reconciler
-│   ├── metrics/
-│   │   └── collector.go # Metrics Server + Prometheus client
-│   └── scaler/
-│       ├── decision.go  # pure scaling logic (no k8s deps)
-│       └── decision_test.go
-├── config/
-│   ├── rbac/            # ClusterRole + ClusterRoleBinding
-│   └── manager/         # Operator Deployment + Service
-├── deploy/
-│   └── example-deployment.yaml
-├── Dockerfile
-├── Makefile
-└── go.mod
-```
