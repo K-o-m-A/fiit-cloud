@@ -40,6 +40,19 @@ spec:
           {{- end }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: MONGODB_HOST
+              value: {{ .Values.mongodb.host }}
+            - name: MONGODB_PORT
+              value: {{ .Values.mongodb.port | quote }}
+            - name: MONGODB_DATABASE
+              value: {{ .Values.mongodb.database }}
+            - name: MONGODB_USERNAME
+              value: {{ .Values.mongodb.username }}
+            - name: MONGODB_PASSWORD
+              value: {{ .Values.mongodb.password }}
+            - name: MONGODB_AUTH_DB
+              value: {{ .Values.mongodb.authDb }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
