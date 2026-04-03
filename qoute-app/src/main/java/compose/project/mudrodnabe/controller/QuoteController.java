@@ -15,7 +15,7 @@ public class QuoteController {
     }
 
     @GetMapping("/quote")
-    public QuoteDto index() {
+    public QuoteDto getQuote() {
         return quoteService.getQuote();
     }
 }

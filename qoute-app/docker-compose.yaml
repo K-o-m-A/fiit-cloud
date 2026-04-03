@@ -1,0 +1,36 @@
+version: '3.8'
+
+name: quotes-app
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: secret
+      MONGO_INITDB_DATABASE: quotesdb
+    networks:
+        - mongo
+    volumes:
+      - mongo_data:/data/db
+  app:
+    build: .
+    container_name: quotes-app
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongodb
+    networks:
+      - mongo
+    env_file:
+      - .env
+
+networks:
+  mongo:
+    driver: bridge
+
+volumes:
+  mongo_data:
