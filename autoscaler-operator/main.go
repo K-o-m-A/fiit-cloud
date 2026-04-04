@@ -8,10 +8,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/controller"
@@ -47,20 +49,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	sp := syncPeriod
-	mgr, err := manager.New(cfg, manager.Options{
-		Namespace:          watchNamespace,
-		MetricsBindAddress: metricsBindAddr,
-		LeaderElection:     leaderElect,
-		LeaderElectionID:   "autoscaler-operator-leader",
-		SyncPeriod:         &sp,
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Metrics: metricsserver.Options{
+			BindAddress: metricsBindAddr,
+		},
+		Cache: cache.Options{
+			SyncPeriod: &syncPeriod,
+		},
+		LeaderElection: leaderElect,
+		LeaderElectionID:        "autoscaler-operator-leader",
+    	LeaderElectionNamespace: "autoscaler-system",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")
 		os.Exit(1)
 	}
 
-	// Register types the controller needs to watch/list.
 	if err := appsv1.AddToScheme(mgr.GetScheme()); err != nil {
 		setupLog.Error(err, "unable to add apps/v1 to scheme")
 		os.Exit(1)
