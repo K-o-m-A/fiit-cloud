@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: yourorg/autoscaler-operator
-  pullPolicy: IfNotPresent
+  repository: xfarkasp/autoscaler-operator
+  pullPolicy: Always
   tag: latest
 
 imagePullSecrets: []
@@ -43,18 +43,18 @@ resources:
     cpu: 200m
     memory: 128Mi
 
-livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 8081
-  initialDelaySeconds: 15
-  periodSeconds: 20
-readinessProbe:
-  httpGet:
-    path: /readyz
-    port: 8081
-  initialDelaySeconds: 5
-  periodSeconds: 10
+# livenessProbe:
+#   httpGet:
+#     path: /healthz
+#     port: 8081
+#   initialDelaySeconds: 15
+#   periodSeconds: 20
+# readinessProbe:
+#   httpGet:
+#     path: /readyz
+#     port: 8081
+#   initialDelaySeconds: 5
+#   periodSeconds: 10
 
 rbac:
   create: true

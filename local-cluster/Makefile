@@ -7,6 +7,7 @@
 # make install                  # Install only the tools
 # make start-cluster            # Start fiit-cloud cluster
 # make install-prometheus-stack # Install Prometheus + Grafana
+# make install-autoscaler-operator # Install autoscaler-operator chart
 # make grafana-open             # Open Grafana in browser (minikube tunnel)
 # make grafana-creds            # Print admin credentials
 # make prometheus-open          # Open Prometheus UI
@@ -27,6 +28,10 @@ HELM_RELEASE   := prometheus-stack
 HELM_REPO_NAME := prometheus-community
 HELM_REPO_URL  := https://prometheus-community.github.io/helm-charts
 HELM_CHART     := prometheus-community/kube-prometheus-stack
+
+AUTOSCALER_NAMESPACE := autoscaler-system
+AUTOSCALER_RELEASE   := autoscaler-operator
+AUTOSCALER_CHART     := ../autoscaler-operator/helm/autoscaler-operator
 
 # ── OS Detection ──────────────────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
@@ -79,7 +84,7 @@ MINIKUBE_URL_WINDOWS := https://github.com/kubernetes/minikube/releases/latest/d
 # ==============================================================================
 
 .PHONY: all
-all: install start-cluster install-prometheus-stack ## Full setup: install tools → start cluster → install Prometheus stack
+all: install start-cluster install-prometheus-stack install-autoscaler-operator ## Full setup: install tools → start cluster → install Prometheus stack and autoscaler-operator
 	@echo ""
 	@echo "=========================================="
 	@echo " ✅  fiit-cloud is ready!"
@@ -303,6 +308,34 @@ uninstall-prometheus-stack: ## Uninstall prometheus stack and remove CRDs
 # GRAFANA / PROMETHEUS HELPERS
 # ==============================================================================
 
+# ==============================================================================
+# AUTOSCALER OPERATOR
+# ==============================================================================
+
+.PHONY: install-autoscaler-operator
+install-autoscaler-operator: ## Install autoscaler-operator from local Helm chart
+	@echo ">>> Ensuring namespace '$(AUTOSCALER_NAMESPACE)' exists..."
+	@kubectl get namespace $(AUTOSCALER_NAMESPACE) >/dev/null 2>&1 || \
+		kubectl create namespace $(AUTOSCALER_NAMESPACE)
+	@echo ">>> Installing chart '$(AUTOSCALER_CHART)' as release '$(AUTOSCALER_RELEASE)'..."
+	@helm upgrade --install $(AUTOSCALER_RELEASE) $(AUTOSCALER_CHART) \
+		--namespace $(AUTOSCALER_NAMESPACE) \
+		--wait \
+		--timeout=10m
+	@echo "  ✔ autoscaler-operator installed in namespace '$(AUTOSCALER_NAMESPACE)'"
+
+.PHONY: upgrade-autoscaler-operator
+upgrade-autoscaler-operator: ## Upgrade autoscaler-operator using local chart
+	@helm upgrade $(AUTOSCALER_RELEASE) $(AUTOSCALER_CHART) \
+		--namespace $(AUTOSCALER_NAMESPACE) \
+		--wait \
+		--timeout=10m
+
+.PHONY: uninstall-autoscaler-operator
+uninstall-autoscaler-operator: ## Uninstall autoscaler-operator release and namespace
+	@helm uninstall $(AUTOSCALER_RELEASE) --namespace $(AUTOSCALER_NAMESPACE) 2>/dev/null || true
+	@kubectl delete namespace $(AUTOSCALER_NAMESPACE) --ignore-not-found
+
 .PHONY: grafana-open
 grafana-open: ## Open Grafana in your browser (via minikube service tunnel)
 	@minikube service $(HELM_RELEASE)-grafana \
@@ -336,10 +369,10 @@ alertmanager-open: ## Open Alertmanager UI in your browser
 # ==============================================================================
 
 .PHONY: clean
-clean: uninstall-prometheus-stack stop-cluster ## Uninstall stack and stop cluster (data preserved)
+clean: uninstall-autoscaler-operator uninstall-prometheus-stack stop-cluster ## Uninstall stacks and stop cluster (data preserved)
 
 .PHONY: nuke
-nuke: uninstall-prometheus-stack delete-cluster ## Uninstall stack and permanently DELETE cluster
+nuke: uninstall-autoscaler-operator uninstall-prometheus-stack delete-cluster ## Uninstall stacks and permanently DELETE cluster
 
 # ==============================================================================
 # HELP
