@@ -1,5 +1,5 @@
 # FIIT-CLOUD-PROJECT
-### Authors: Peter Farkaš, Dárius=Dušan Horváth, Adrián Komanek, Frederik Duvač
+### Authors: Peter Farkaš, Darius-Dušan Horvath, Adrián Komanek, Frederik Duvač
 
 ## OpenStack Terraform
 
@@ -168,7 +168,7 @@ docker push yourusername/quote-app:latest
 
 ---
 
-## ☸Kubernetes (Helm)
+## Kubernetes (Helm)
 
 The Helm chart deploys both the app and MongoDB together using a Bitnami MongoDB dependency.
 
