@@ -1,4 +1,4 @@
-# Default values for qoute-app.
+# Default values for quote-app.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
@@ -161,9 +161,23 @@ tolerations: []
 affinity: {}
 
 mongodb:
-  host: mongodb
-  port: 27017
-  database: quote
-  username: root
-  password: secret
-  authDb: admin
+  image:
+    tag: "latest"
+  auth:
+    rootUser: root
+    rootPassword: secret
+    usernames:
+      - root
+    passwords:
+      - secret
+    databases:
+      - quote
+
+app:
+  mongodb:
+    host: quote-app-mongodb
+    port: 27017
+    database: quote
+    username: root
+    password: secret
+    authDb: admin
