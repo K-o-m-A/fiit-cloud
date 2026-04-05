@@ -33,6 +33,10 @@ AUTOSCALER_NAMESPACE := autoscaler-system
 AUTOSCALER_RELEASE   := autoscaler-operator
 AUTOSCALER_CHART     := ../autoscaler-operator/helm/autoscaler-operator
 
+QUOTE_APP_RELEASE	:= quote-app
+QUOTE_APP_CHART		:= ../quote-app/helm/quote-app
+QUOTE_APP_NAMESPACE	:= apps
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
   DETECTED_OS := windows
@@ -84,7 +88,7 @@ MINIKUBE_URL_WINDOWS := https://github.com/kubernetes/minikube/releases/latest/d
 # ==============================================================================
 
 .PHONY: all
-all: install start-cluster install-prometheus-stack install-autoscaler-operator ## Full setup: install tools → start cluster → install Prometheus stack and autoscaler-operator
+all: install start-cluster install-prometheus-stack install-autoscaler-operator install-quote-app ## Full setup: install tools → start cluster → install Prometheus stack and autoscaler-operator
 	@echo ""
 	@echo "=========================================="
 	@echo " ✅  fiit-cloud is ready!"
@@ -369,10 +373,40 @@ alertmanager-open: ## Open Alertmanager UI in your browser
 # ==============================================================================
 
 .PHONY: clean
-clean: uninstall-autoscaler-operator uninstall-prometheus-stack stop-cluster ## Uninstall stacks and stop cluster (data preserved)
+clean: uninstall-quote-app uninstall-autoscaler-operator uninstall-prometheus-stack stop-cluster ## Uninstall stacks and stop cluster (data preserved)
 
 .PHONY: nuke
-nuke: uninstall-autoscaler-operator uninstall-prometheus-stack delete-cluster ## Uninstall stacks and permanently DELETE cluster
+nuke: uninstall-quote-app uninstall-autoscaler-operator uninstall-prometheus-stack delete-cluster ## Uninstall stacks and permanently DELETE cluster
+
+# ==============================================================================
+# QUOTE APP
+# ==============================================================================
+
+.PHONY: install-quote-app
+install-quote-app: ## Install quote-app and MongoDB dependency
+	@echo ">>> Adding Bitnami Helm repo..."
+	@helm repo add bitnami https://charts.bitnami.com/bitnami 2>/dev/null || true
+	@helm repo update
+	@echo ">>> Ensuring namespace '$(QUOTE_APP_NAMESPACE)' exists..."
+	@kubectl get namespace $(QUOTE_APP_NAMESPACE) >/dev/null 2>&1 || \
+		kubectl create namespace $(QUOTE_APP_NAMESPACE)
+	@echo ">>> Pulling chart dependencies..."
+	@helm dependency update $(QUOTE_APP_CHART)
+	@echo ">>> Installing $(QUOTE_APP_RELEASE)..."
+	@helm upgrade --install $(QUOTE_APP_RELEASE) $(QUOTE_APP_CHART) \
+		--namespace $(QUOTE_APP_NAMESPACE) \
+		--wait \
+		--timeout=5m
+	@echo "  ✔ quote-app installed"
+
+.PHONY: uninstall-quote-app
+uninstall-quote-app: ## Uninstall quote-app and MongoDB
+	@helm uninstall $(QUOTE_APP_RELEASE) --namespace $(QUOTE_APP_NAMESPACE) 2>/dev/null || true
+	@echo "  ✔ quote-app uninstalled"
+
+.PHONY: port-forward-quote-app
+port-forward-quote-app: ## Port forward quote-app to localhost:8080
+	@kubectl port-forward svc/$(QUOTE_APP_RELEASE) 8080:8080 --namespace $(QUOTE_APP_NAMESPACE)
 
 # ==============================================================================
 # HELP

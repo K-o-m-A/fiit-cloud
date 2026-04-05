@@ -84,8 +84,121 @@ One-shot setup:
 ```bash
 make all
 ```
+#  Quote App — Backend
 
-## Autoscaler Operator
+A Spring Boot REST API that serves random quotes from MongoDB. Fully containerized with Docker and deployable to Kubernetes via Helm.
+
+---
+
+## Project Structure
+
+```
+qoute-app/
+├── Dockerfile                  # Multi-stage Docker build
+├── docker-compose.yaml         # Local development (app + MongoDB)
+├── pom.xml
+├── helm/
+│   └── quote-app/              # Helm chart for Kubernetes deployment
+│       ├── Chart.yaml          # Chart metadata + MongoDB dependency
+│       ├── values.yaml         # Configuration values
+│       └── templates/
+│           ├── deployment.yaml
+│           ├── service.yaml
+│           └── ...
+└── src/
+    └── main/
+        ├── java/compose/project/mudrodnabe/
+        │   ├── MudroDnaBeApplication.java
+        │   ├── entities/
+        │   │   └── Quote.java
+        │   └── migrations/
+        │       └── SeedQuotesMigration.java
+        └── resources/
+            └── application.properties
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
+- Docker Desktop (with Kubernetes enabled)
+- Java 21
+- Maven
+- `kubectl`
+- `helm`
+
+---
+
+## Local Development (Docker Compose)
+
+Run the app and MongoDB locally with Docker Compose:
+
+```bash
+# Start MongoDB
+docker-compose up -d
+
+# Run the Spring Boot app locally
+./mvnw spring-boot:run
+```
+
+The API will be available at `http://localhost:8080`.
+
+---
+
+## Docker
+
+### Build the image
+
+```bash
+docker build -t yourusername/quote-app:latest .
+```
+
+### Run the container
+
+```bash
+docker run --env-file .env -p 8080:8080 yourusername/quote-app:latest
+```
+
+### Push to Docker Hub
+
+```bash
+docker push yourusername/quote-app:latest
+```
+
+---
+
+## ☸Kubernetes (Helm)
+
+The Helm chart deploys both the app and MongoDB together using a Bitnami MongoDB dependency.
+
+### Using the Makefile (recommended)
+
+From the `fiit-cloud/local-cluster/` directory:
+
+```bash
+# Deploy everything (cluster + monitoring + quote app)
+make all
+
+# Deploy only the quote app
+make install-quote-app
+
+# Uninstall the quote app
+make uninstall-quote-app
+
+# Port forward to test locally
+make port-forward-quote-app
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description          |
+|--------|----------|----------------------|
+| GET    | `/quote` | Returns a random quote |
+
+# Autoscaler Operator
 
 `autoscaler-operator` is a lightweight Kubernetes operator written in Go that scales labeled Deployments automatically based on (for now) CPU and memory utilisation. In future the loadbalancing using amount of incoming requests will be implemented.
 
