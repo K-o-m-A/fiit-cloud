@@ -84,3 +84,65 @@ One-shot setup:
 ```bash
 make all
 ```
+
+## Autoscaler Operator
+
+`autoscaler-operator` is a lightweight Kubernetes operator written in Go that scales labeled Deployments automatically based on (for now) CPU and memory utilisation. In future the loadbalancing using amount of incoming requests will be implemented.
+
+### What It Does
+- watches Deployments based on label
+- reads CPU and memory metrics from Kubernetes Metrics Server
+- decides whether to scale up, scale down, or hold
+- updates `deployment.spec.replicas` through the controller reconciliation loop
+
+### How It Works
+1. A Deployment is marked for autoscaling with `autoscaler.yourorg.io/enabled: "true"`
+2. The operator reads the current CPU and memory utilisation for that workload
+3. The scaler applies the configured thresholds and replica limits
+4. The reconciler patches the Deployment when scaling is needed
+5. If no change is needed, the operator requeues and checks again later
+
+### Decision Making (When to Scale Up/Down)
+The operator follows strict rules in each reconciliation cycle:
+
+1. Scale Up rule:
+	- if any of the metrics (CPU or memory) is greater than or equal to its scale-up threshold, the operator requests scale up
+	- replicas are increased by `scale-up-step` and capped at `max-replicas`
+
+2. Scale Down rule:
+	- scale down happens only if all active metrics are below their scale-down thresholds
+	- replicas are decreased by `scale-down-step` and never go below `min-replicas`
+
+3. Hold rule:
+	- if metrics are mixed (for example CPU says scale up but memory does not), the operator holds current replica count
+	- if metrics are unavailable (or no running pods are measured), it holds
+
+### Deployment Configuration
+You can tune autoscaling behavior with annotations on each Deployment:
+
+```yaml
+metadata:
+	labels:
+		autoscaler.yourorg.io/enabled: "true"
+	annotations:
+		autoscaler.yourorg.io/min-replicas: "2"
+		autoscaler.yourorg.io/max-replicas: "20"
+		autoscaler.yourorg.io/cpu-scale-up-threshold: "75"
+		autoscaler.yourorg.io/cpu-scale-down-threshold: "25"
+		autoscaler.yourorg.io/mem-scale-up-threshold: "80"
+		autoscaler.yourorg.io/mem-scale-down-threshold: "30"
+```
+
+Important note:
+- resource requests should be set on containers so CPU and memory percentages are meaningful
+
+### Install in Local Cluster
+The local cluster Makefile includes a target for installing the chart after the cluster and monitoring stack are up:
+
+```bash
+make install-autoscaler-operator
+```
+### Test
+```
+kubectl run load-gen --image=busybox:1.28 --restart=Never -it --rm --   /bin/sh -c "while true; do wget -q -O- http://qoute-app:8080; done"
+```
