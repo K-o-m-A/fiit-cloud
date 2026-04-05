@@ -256,6 +256,23 @@ The local cluster Makefile includes a target for installing the chart after the 
 make install-autoscaler-operator
 ```
 ### Test
+
+Run configuration command:
+```bash
+kubectl label deployment quote-app -n apps autoscaler.yourorg.io/enabled=true --overwrite
+
+kubectl annotate deployment quote-app -n apps \
+  autoscaler.yourorg.io/min-replicas=1 \
+  autoscaler.yourorg.io/max-replicas=5 \
+  autoscaler.yourorg.io/scale-up-step=1 \
+  autoscaler.yourorg.io/scale-down-step=1 \
+  autoscaler.yourorg.io/cpu-enabled=true \
+  autoscaler.yourorg.io/cpu-scale-up-threshold=75 \
+  autoscaler.yourorg.io/cpu-scale-down-threshold=25 \
+  --overwrite
 ```
-kubectl run load-gen --image=busybox:1.28 --restart=Never -it --rm --   /bin/sh -c "while true; do wget -q -O- http://qoute-app:8080; done"
+
+And then run the following command
+```bash
+kubectl run load-gen --image=busybox:1.28 --restart=Never -it --rm -n apps -- /bin/sh -c "while true; do wget -q -O- http://quote-app:8080/quote; done"
 ```
