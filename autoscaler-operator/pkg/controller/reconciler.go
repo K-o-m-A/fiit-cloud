@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -25,6 +26,7 @@ import (
 // Options are passed from main to SetupWithManager.
 type Options struct {
 	SyncPeriod time.Duration
+	MetricsClient metricsclient.Interface
 }
 
 // DeploymentReconciler reconciles Deployments that carry the autoscaler opt-in label.
@@ -42,7 +44,7 @@ type DeploymentReconciler struct {
 func SetupWithManager(mgr manager.Manager, opts Options) error {
 	r := &DeploymentReconciler{
 		client:         mgr.GetClient(),
-		collector:      metrics.New(mgr.GetClient()),
+		collector: 		metrics.New(mgr.GetClient(), opts.MetricsClient),
 		scaleUpTimes:   make(map[string]time.Time),
 		scaleDownTimes: make(map[string]time.Time),
 	}

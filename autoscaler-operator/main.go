@@ -7,7 +7,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -17,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/controller"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 func main() {
@@ -27,14 +27,10 @@ func main() {
 		leaderElect     bool
 	)
 
-	flag.StringVar(&watchNamespace, "watch-namespace", "",
-		"Namespace to watch for labeled Deployments. Empty = all namespaces.")
-	flag.DurationVar(&syncPeriod, "sync-period", 30*time.Second,
-		"How often the controller re-evaluates scaling decisions.")
-	flag.StringVar(&metricsBindAddr, "metrics-bind-address", ":8080",
-		"Address for the controller-runtime metrics endpoint.")
-	flag.BoolVar(&leaderElect, "leader-elect", false,
-		"Enable leader election for high-availability deployments.")
+	flag.StringVar(&watchNamespace, "watch-namespace", "", "Namespace to watch.")
+	flag.DurationVar(&syncPeriod, "sync-period", 30*time.Second, "How often to re-evaluate.")
+	flag.StringVar(&metricsBindAddr, "metrics-bind-address", ":8080", "Metrics endpoint.")
+	flag.BoolVar(&leaderElect, "leader-elect", false, "Enable leader election.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -49,16 +45,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	mc, err := metricsclient.NewForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to create metrics client")
+		os.Exit(1)
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Metrics: metricsserver.Options{
-			BindAddress: metricsBindAddr,
-		},
-		Cache: cache.Options{
-			SyncPeriod: &syncPeriod,
-		},
-		LeaderElection: leaderElect,
+		Metrics:                 metricsserver.Options{BindAddress: metricsBindAddr},
+		Cache:                   cache.Options{SyncPeriod: &syncPeriod},
+		LeaderElection:          leaderElect,
 		LeaderElectionID:        "autoscaler-operator-leader",
-    	LeaderElectionNamespace: "autoscaler-system",
+		LeaderElectionNamespace: "autoscaler-system",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")
@@ -73,13 +71,10 @@ func main() {
 		setupLog.Error(err, "unable to add core/v1 to scheme")
 		os.Exit(1)
 	}
-	if err := metricsv1beta1.AddToScheme(mgr.GetScheme()); err != nil {
-		setupLog.Error(err, "unable to add metrics/v1beta1 to scheme")
-		os.Exit(1)
-	}
 
 	if err := controller.SetupWithManager(mgr, controller.Options{
-		SyncPeriod: syncPeriod,
+		SyncPeriod:    syncPeriod,
+		MetricsClient: mc,
 	}); err != nil {
 		setupLog.Error(err, "unable to setup autoscaler controller")
 		os.Exit(1)

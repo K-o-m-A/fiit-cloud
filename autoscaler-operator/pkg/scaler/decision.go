@@ -202,6 +202,10 @@ func Evaluate(in Input) Decision {
 		}
 	}
 
+	// At the bottom of Evaluate(), before the final return:
+	fmt.Printf("DEBUG evaluate: activeMetrics=%d belowDownCount=%d cpuEnabled=%v cpuObs=%d cpuDownPct=%d\n",
+    activeMetrics, belowDownCount, in.CPUEnabled, snap.AvgCPUUtilizationPct, in.CPUScaleDownPct)
+
 	return Decision{Direction: Hold, DesiredReplicas: in.CurrentReplicas}
 }
 

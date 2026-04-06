@@ -3,12 +3,14 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"sigs.k8s.io/controller-runtime/pkg/log" 
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    versioned "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 // DeploymentSnapshot is the aggregated metric reading for a single reconcile cycle.
@@ -28,13 +30,11 @@ type DeploymentSnapshot struct {
 // Collector fetches resource metrics from the Kubernetes Metrics Server.
 type Collector struct {
 	k8sClient client.Client
+	metricsClient versioned.Interface
 }
 
-// New creates a ready-to-use Collector.
-func New(c client.Client) *Collector {
-	return &Collector{
-		k8sClient: c,
-	}
+func New(c client.Client, mc versioned.Interface) *Collector {
+    return &Collector{k8sClient: c, metricsClient: mc}
 }
 
 // Collect returns a DeploymentSnapshot for all running pods matching selector.
@@ -49,7 +49,6 @@ func (c *Collector) Collect(
 		AvgMemUtilizationPct: -1,
 	}
 
-	// Collect CPU / Memory via Metrics Server.
 	if err := c.collectResourceMetrics(ctx, namespace, selector, snap); err != nil {
 		return snap, fmt.Errorf("resource metrics: %w", err)
 	}
@@ -58,7 +57,8 @@ func (c *Collector) Collect(
 }
 
 // collectResourceMetrics populates CPU/Mem fields in the snapshot by iterating
-// over all running pods and fetching their PodMetrics objects.
+// over all running pods and fetching their PodMetrics via a List call (avoids
+// the watch cache which metrics.k8s.io does not support).
 func (c *Collector) collectResourceMetrics(
 	ctx context.Context,
 	namespace string,
@@ -66,12 +66,35 @@ func (c *Collector) collectResourceMetrics(
 	snap *DeploymentSnapshot,
 ) error {
 
+	// List running pods matching the deployment selector.
 	podList := &corev1.PodList{}
 	if err := c.k8sClient.List(ctx, podList,
 		client.InNamespace(namespace),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
 		return fmt.Errorf("listing pods: %w", err)
+	}
+
+	logger := log.FromContext(ctx)
+    logger.Info("DEBUG pods found", "count", len(podList.Items))
+    for _, p := range podList.Items {
+        logger.Info("DEBUG pod", "name", p.Name, "phase", p.Status.Phase)
+    }
+
+	pmList, err := c.metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("listing pod metrics: %w", err)
+	}
+
+	logger.Info("DEBUG pod metrics found", "count", len(pmList.Items))
+    for _, pm := range pmList.Items {
+        logger.Info("DEBUG podmetric", "name", pm.Name)
+    }
+
+	// Build a name → PodMetrics lookup map for O(1) access.
+	pmMap := make(map[string]metricsv1beta1.PodMetrics, len(pmList.Items))
+	for _, pm := range pmList.Items {
+		pmMap[pm.Name] = pm
 	}
 
 	var (
@@ -88,12 +111,9 @@ func (c *Collector) collectResourceMetrics(
 			continue
 		}
 
-		pm := &metricsv1beta1.PodMetrics{}
-		if err := c.k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: namespace, Name: pod.Name},
-			pm,
-		); err != nil {
-			// Pod metrics not yet available (e.g. just started). Skip.
+		pm, ok := pmMap[pod.Name]
+		if !ok {
+			// Metrics not yet available for this pod (e.g. just started). Skip.
 			continue
 		}
 
