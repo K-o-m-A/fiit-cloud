@@ -269,6 +269,9 @@ kubectl annotate deployment quote-app -n apps \
   autoscaler.yourorg.io/cpu-enabled=true \
   autoscaler.yourorg.io/cpu-scale-up-threshold=75 \
   autoscaler.yourorg.io/cpu-scale-down-threshold=25 \
+  autoscaler.yourorg.io/mem-enabled=true \
+  autoscaler.yourorg.io/mem-scale-up-threshold=80 \
+  autoscaler.yourorg.io/mem-scale-down-threshold=60 \
   --overwrite
 ```
 
