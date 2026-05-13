@@ -528,3 +528,113 @@ The second observation concerns the scale-down trajectory. With a sixty-second `
 The third observation is operational. Beyond the numeric metrics, the experiment provides qualitative insight into how the operator behaves under load. By tailing the operator's log in real time, one can read off the precise reason that triggered each scaling decision: each log line emitted at scale-up or scale-down time contains a serialized `Decision` that lists the metrics involved, the observed values, and the thresholds that were crossed. Kubernetes events recorded on the deployment provide a more durable trail of the same information and can be retrieved at any time with `kubectl describe deploy quote-app -n apps`. Together, the log and the event stream are sufficient to reconstruct the entire history of an experiment and to diagnose any unexpected behavior.
 
 A final note on a defect discovered while preparing this experiment: the original metrics collector aborted the entire snapshot when `metrics.k8s.io` was unavailable, which left `PodCount=0` and prevented the RPS path from running even when CPU/memory were disabled. The collector was patched to compute `PodCount` from the running pod list as a fallback and to query Prometheus independently of the resource-metrics path. The results above were obtained with the patched operator.
+
+### 6.2 Experiment 2 — Scaling based on CPU and memory utilisation
+
+This experiment exercises the operator in its resource-based configuration. The RPS signal is explicitly disabled (`rps-enabled=false`), so the only inputs that can move `spec.replicas` are the CPU and memory utilisation percentages obtained from the Kubernetes Metrics Server. The goal is to demonstrate that the same operator can drive purely resource-based scaling — the model exposed by the stock HPA — and to make visible two structural difficulties that resource-based scaling has on JVM workloads such as `quote-app`.
+
+#### 6.2.1 Goal and pass criteria
+
+The experiment is considered successful when all four properties below hold:
+
+1. The replica count increases within sixty seconds of the moment the average CPU utilisation across all running pods crosses the configured `cpu-scale-up-threshold`.
+2. Once load is removed and both CPU and memory utilisation fall under their respective scale-down thresholds, the replica count returns to `min-replicas=1` after the configured `scale-down-cooldown` has elapsed for each step.
+3. The replica count never leaves the `[min-replicas, max-replicas] = [1, 5]` interval.
+4. No oscillation occurs — scale-up events occur only while load is present, scale-down events only after it is removed; the direction never reverses within a single phase.
+
+#### 6.2.2 Setup
+
+The CPU + memory configuration uses annotations chosen to **account for the way the JVM manages heap memory**: a Spring Boot application allocates roughly 65–75 % of its memory request as a stable baseline even at idle, so the conventional `mem-scale-down-threshold=20 %` from the stock HPA model is unreachable in practice. To make scale-down possible, the memory window is shifted upward, turning memory into a *guardrail* against extreme pressure rather than a driver. CPU is left at the conventional thresholds because it drops back to near zero whenever load stops.
+
+| Annotation | Value | Rationale |
+|---|---|---|
+| `min-replicas` | `1` | lower bound |
+| `max-replicas` | `5` | upper bound |
+| `scale-up-step` / `scale-down-step` | `1` / `1` | one replica per event |
+| `scale-up-cooldown` / `scale-down-cooldown` | `30 s` / `60 s` | tightened relative to the production defaults for an observable demo |
+| `cpu-enabled` | `true` | CPU is the primary driver |
+| `cpu-scale-up-threshold` | `75 %` | conventional HPA-style default |
+| `cpu-scale-down-threshold` | `25 %` | drops to near zero when load stops, so easily reached |
+| `mem-enabled` | `true` | memory is a guardrail |
+| `mem-scale-up-threshold` | `95 %` | only acts as a trigger under genuine memory pressure |
+| `mem-scale-down-threshold` | `90 %` | JVM idle baseline of ≈ 65–75 % is comfortably below 90 %, allowing memory's scale-down vote to fire |
+| `rps-enabled` | `false` | RPS is explicitly disabled in this experiment |
+
+CPU and memory utilisations are computed by the metrics collector as documented in Section 4.3 (`Σ usage / Σ requests × 100`). The `quote-app` deployment must have `resources.requests` set on both CPU and memory, which it does by default in the Helm chart (`requests.cpu=250m`, `requests.memory=256Mi`); otherwise the affected metric would be marked inactive by the `-1` sentinel and the corresponding vote would not contribute to the decision.
+
+Two **preconditions on the chart itself** must be met for the experiment to run cleanly under scale-up:
+
+- A `startupProbe` is configured on the application container, with a budget long enough to cover Spring Boot's twenty- to forty-second start-up. Without it the liveness probe — which is checked from the moment the container starts — kills new replicas before they finish initialising and leaves the deployment in `CrashLoopBackOff` during scale-up. The chart that ships with this project includes such a probe (`failureThreshold: 60` × `periodSeconds: 5` = a five-minute startup budget).
+- The image referenced by the chart exposes the Spring Boot actuator at `/actuator/health` for the probes. Both endpoints are present in `xfarkasp/mudro-dna-be:latest`.
+
+#### 6.2.3 Running the experiment
+
+The experiment uses the same `busybox` load generator as Experiment 1 and the same three observation surfaces (replica count, operator log, metric graphs). The procedure is launched manually because the trade-offs that make CPU + memory scaling interesting are best observed step by step.
+
+```bash
+# 1. Apply the experiment-specific annotations (CPU + Mem only)
+kubectl label deployment quote-app -n apps \
+    autoscaler.fiit-cloud.io/enabled=true --overwrite
+
+kubectl annotate deployment quote-app -n apps \
+    autoscaler.fiit-cloud.io/min-replicas=1 \
+    autoscaler.fiit-cloud.io/max-replicas=5 \
+    autoscaler.fiit-cloud.io/scale-up-step=1 \
+    autoscaler.fiit-cloud.io/scale-down-step=1 \
+    autoscaler.fiit-cloud.io/scale-up-cooldown=30 \
+    autoscaler.fiit-cloud.io/scale-down-cooldown=60 \
+    autoscaler.fiit-cloud.io/cpu-enabled=true \
+    autoscaler.fiit-cloud.io/cpu-scale-up-threshold=75 \
+    autoscaler.fiit-cloud.io/cpu-scale-down-threshold=25 \
+    autoscaler.fiit-cloud.io/mem-enabled=true \
+    autoscaler.fiit-cloud.io/mem-scale-up-threshold=95 \
+    autoscaler.fiit-cloud.io/mem-scale-down-threshold=90 \
+    autoscaler.fiit-cloud.io/rps-enabled=false \
+    --overwrite
+
+# 2. Watch replicas, in a dedicated terminal
+kubectl get deploy quote-app -n apps -w
+
+# 3. Watch the operator's decisions, in another terminal
+kubectl logs -n autoscaler-system deploy/autoscaler-operator -f \
+    | grep -E "scaling decision|scaled up|scaled down"
+
+# 4. Apply synthetic load, in a third terminal
+kubectl run load-gen --image=busybox:1.28 --restart=Never -n apps \
+    -- /bin/sh -c "while true; do wget -q -O- http://quote-app:8080/quote; done"
+
+# 5. When replicas reach max-replicas=5, stop the load
+kubectl delete pod load-gen -n apps --now
+```
+
+#### 6.2.4 Procedure
+
+The experiment proceeds through four phases:
+
+1. **Baseline (≈ 30 s)** — record idle replica count, CPU utilisation, and memory utilisation. With one replica receiving only liveness-probe and Prometheus-scrape traffic, CPU is typically in the single-digit percent range and memory hovers near the JVM heap baseline (≈ 65–75 % of the 256 Mi request).
+2. **Apply load** — start the `busybox` load generator and wait for it to become `Running`.
+3. **Watch scale-up (≤ 180 s)** — sample replica count and per-pod CPU utilisation every ten seconds until either `max-replicas=5` is reached or the deadline elapses. Record the time of the first scale-up event and the time of every subsequent step.
+4. **Stop load and watch scale-down (≤ 360 s)** — delete the load generator and continue sampling until replicas drop back to `min-replicas=1`. Record the time of every scale-down event.
+
+#### 6.2.5 Expected results and observations
+
+Compared to Experiment 1 (RPS-driven scaling), the resource-based configuration reacts more slowly in both directions, and this slowness is the central qualitative finding of the experiment.
+
+- **Scale-up onset.** CPU has to climb past 75 % of its 250 m request — i.e. above 187 m of actual usage — before the operator triggers the first scale-up. Because CPU is a second-order signal (requests have to saturate the JVM thread pool before CPU rises), the first scale-up typically occurs thirty to forty-five seconds after the load generator starts, against the ten- to twenty-second window observed in Experiment 1. The subsequent steps are paced by `scale-up-cooldown=30 s`, so the deployment reaches `max-replicas=5` roughly two minutes after load is applied.
+- **Scale-down trajectory.** CPU drops below 25 % within ten seconds of load being removed, which would by itself authorise scale-down. Memory, however, does **not** drop in lockstep — the JVM holds onto heap, releasing it only under sustained idle and only if the chosen garbage collector supports heap shrinkage. With the threshold raised to 90 %, the JVM's typical 65–80 % idle baseline qualifies, and unanimous-vote scale-down proceeds at the rate dictated by `scale-down-cooldown=60 s` (≈ four cooldown windows to drop from five to one replica, comparable to the 257 s observed in Experiment 1).
+- **Replica oscillation.** No oscillation is expected. The unanimous-vote rule prevents memory briefly dipping below 90 % during a stop-the-world GC pause from being interpreted as "load is gone" while CPU is still high: CPU must also fall under its scale-down threshold before any replica is removed.
+
+#### 6.2.6 Discussion — why CPU + memory autoscaling is more difficult for JVM workloads
+
+The two practical issues this experiment exposes — delayed reaction time and a sticky memory floor — are not specific to our operator; they are inherent properties of resource-based scaling applied to JVM applications.
+
+| Difficulty | Root cause | Effect on autoscaling |
+|---|---|---|
+| Memory utilisation remains ≥ 65 % even when idle | The JVM holds onto whatever heap it has grown into, releasing it only under sustained idle and only if the chosen garbage collector supports heap shrinking | With the conventional `mem-scale-down-threshold=20 %`, scale-down can never satisfy memory's vote in practice; the operator stays at the high-water replica count indefinitely |
+| Scale-up onset is delayed relative to traffic | CPU is a second-order signal — requests have to saturate the application before CPU rises | Visible user-facing latency during the surge; capacity arrives after the bottleneck, not before |
+
+Two design responses are visible in this experiment. First, the **per-metric enable/disable flags** (`cpu-enabled`, `mem-enabled`, `rps-enabled`) make it possible to opt the unreliable metric out entirely — a `rps-enabled=true / cpu-enabled=false / mem-enabled=false` configuration (Experiment 1) sidesteps both issues. Second, the **independence of thresholds** in our operator (the `*-scale-up` and `*-scale-down` annotations are independent integers per metric) makes it possible to *shift the operating window* of a problematic metric so that it functions as a guardrail rather than a primary driver, which is what the `mem-scale-up-threshold=95 / mem-scale-down-threshold=90` values do for memory in this experiment.
+
+The trade-off between resource-based and request-rate-based scaling is therefore not "which one is better" but "which one fits the workload": for stateless HTTP services with a usable `/metrics` endpoint, RPS-based scaling is faster and easier to tune; for non-HTTP workloads — or HTTP workloads that do not naturally expose a counter such as `http_server_requests_seconds_count` — CPU and memory remain the only realistic choice, with the caveats demonstrated here.
+
+A practical defect surfaced during preparation of this experiment and is worth recording: the original chart did not declare a `startupProbe` and used `/` as the liveness path. On a busy node this caused the kubelet to send SIGTERM to newly created pods before Spring Boot had finished booting, which manifested as a `CrashLoopBackOff` for every replica added by scale-up. The chart was amended to add a `startupProbe` with a five-minute budget and to use `/actuator/health` for the liveness and readiness probes; the expected results above assume this fix is in place.
