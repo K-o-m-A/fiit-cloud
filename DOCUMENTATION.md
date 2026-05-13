@@ -46,7 +46,7 @@ Horizontal autoscaling on Kubernetes is not a new problem and several mature sol
 
 What sets our solution apart is the combination of six deliberate design choices:
 
-- **Fully label- and annotation-driven.** The user does not need to install any custom resource definitions and does not need to author any additional manifests. The whole scaling policy lives on the deployment it describes.
+- **Fully driven by labels and annotations.** The user does not need to install any custom resource definitions and does not need to author any additional manifests. The whole scaling policy lives on the deployment it describes.
 - **Application-level signal in addition to resource signals.** Beyond CPU and memory, the operator can scale on per-pod request rate queried from Prometheus. This makes it suitable for HTTP services where traffic is a more useful signal than the resource pressure it eventually causes. CPU, memory and RPS are independent - any combination of them can be enabled per workload.
 - **Pure-function scaling algorithm.** The decision logic is a pure Go function with no Kubernetes dependency, which makes it possible to unit-test it without a real or fake cluster and which keeps the rules of the algorithm in a single, easily reviewable file.
 - **Conservative scale-down rule.** Scale-down requires a unanimous verdict from all active metrics rather than just one. This trades a small amount of replica savings for visibly improved stability in the face of noisy or weakly correlated signals.
@@ -235,7 +235,7 @@ The solution also makes three explicit assumptions about the environment in whic
 - The cluster has a working Metrics Server. Without it the CPU and memory snapshot fields drop to `-1` and the operator falls back to whichever other metrics are active; if no metric is active it simply holds the current replica count.
 - The workload being scaled has `resources.requests` set for both CPU and memory. Without them the percentage computation has no denominator and the operator treats the affected metric as inactive.
 - For RPS-based scaling, the cluster runs Prometheus reachable at the URL passed via the operator's `--prometheus-url` flag, and the workload exposes a counter `http_server_requests_seconds_count` that Prometheus scrapes. 
-- 
+ 
 All three assumptions are easy to satisfy in a typical cluster and are explicitly verified during the setup procedure. First two are also considered best practice for running Kubernetes.
 
 ### 5.2 The autoscaler-operator component
@@ -264,23 +264,23 @@ metadata:
 
 The full set of annotations recognized by the operator is summarized in the following table. All keys are prefixed with `autoscaler.fiit-cloud.io/`; the prefix is omitted from the table for brevity.
 
-| Annotation | Default | Meaning |
-|---|---|---|
-| `min-replicas` | `1` | lower replica bound |
-| `max-replicas` | **required** | upper replica bound |
-| `scale-up-step` | `1` | replicas added per scale-up |
-| `scale-down-step` | `1` | replicas removed per scale-down |
-| `scale-up-cooldown` | `60` (s) | minimum interval between scale-up events |
-| `scale-down-cooldown` | `300` (s) | minimum interval between scale-down events |
-| `cpu-enabled` | `true` | whether CPU is taken into account |
-| `cpu-scale-up-threshold` | `80` (%) | CPU scale-up threshold (percentage of CPU request) |
-| `cpu-scale-down-threshold` | `20` (%) | CPU scale-down threshold (percentage of CPU request) |
-| `mem-enabled` | `true` | whether memory is taken into account |
-| `mem-scale-up-threshold` | `80` (%) | memory scale-up threshold (percentage of memory request) |
-| `mem-scale-down-threshold` | `20` (%) | memory scale-down threshold (percentage of memory request) |
-| `rps-enabled` | `false` | whether per-pod request rate is taken into account (opt-in; requires the operator's `--prometheus-url` flag to be set) |
-| `rps-scale-up-threshold` | `100` (req/s) | RPS scale-up threshold (average requests per second per pod) |
-| `rps-scale-down-threshold` | `10` (req/s) | RPS scale-down threshold (average requests per second per pod) |
+| Annotation                 | Default       | Meaning                                                                                                                |
+| -------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `min-replicas`             | `1`           | lower replica bound                                                                                                    |
+| `max-replicas`             | **required**  | upper replica bound                                                                                                    |
+| `scale-up-step`            | `1`           | replicas added per scale-up                                                                                            |
+| `scale-down-step`          | `1`           | replicas removed per scale-down                                                                                        |
+| `scale-up-cooldown`        | `60` (s)      | minimum interval between scale-up events                                                                               |
+| `scale-down-cooldown`      | `300` (s)     | minimum interval between scale-down events                                                                             |
+| `cpu-enabled`              | `true`        | whether CPU is taken into account                                                                                      |
+| `cpu-scale-up-threshold`   | `80` (%)      | CPU scale-up threshold (percentage of CPU request)                                                                     |
+| `cpu-scale-down-threshold` | `20` (%)      | CPU scale-down threshold (percentage of CPU request)                                                                   |
+| `mem-enabled`              | `true`        | whether memory is taken into account                                                                                   |
+| `mem-scale-up-threshold`   | `80` (%)      | memory scale-up threshold (percentage of memory request)                                                               |
+| `mem-scale-down-threshold` | `20` (%)      | memory scale-down threshold (percentage of memory request)                                                             |
+| `rps-enabled`              | `false`       | whether per-pod request rate is taken into account (opt-in; requires the operator's `--prometheus-url` flag to be set) |
+| `rps-scale-up-threshold`   | `100` (req/s) | RPS scale-up threshold (average requests per second per pod)                                                           |
+| `rps-scale-down-threshold` | `10` (req/s)  | RPS scale-down threshold (average requests per second per pod)                                                         |
 
 #### Reconciliation lifecycle (pseudocode)
 
@@ -324,14 +324,14 @@ Beyond the business endpoint, the service exposes the Spring Boot Actuator endpo
 
 The application's most important pom dependencies are:
 
-| Dependency | Role |
-|---|---|
-| `spring-boot-starter-web` | REST endpoint, embedded Tomcat |
-| `spring-boot-starter-data-mongodb` | Spring Data repository support for MongoDB |
-| `spring-boot-starter-actuator` | health, info, and prometheus endpoints |
-| `micrometer-registry-prometheus` | Prometheus exposition of HTTP metrics |
-| `io.mongock:mongock-springboot-v3` + `mongodb-springdata-v4-driver` | versioned database migrations |
-| `org.projectlombok:lombok` | boilerplate elimination on entities and DTOs |
+| Dependency                                                          | Role                                         |
+| ------------------------------------------------------------------- | -------------------------------------------- |
+| `spring-boot-starter-web`                                           | REST endpoint, embedded Tomcat               |
+| `spring-boot-starter-data-mongodb`                                  | Spring Data repository support for MongoDB   |
+| `spring-boot-starter-actuator`                                      | health, info, and prometheus endpoints       |
+| `micrometer-registry-prometheus`                                    | Prometheus exposition of HTTP metrics        |
+| `io.mongock:mongock-springboot-v3` + `mongodb-springdata-v4-driver` | versioned database migrations                |
+| `org.projectlombok:lombok`                                          | boilerplate elimination on entities and DTOs |
 
 All MongoDB connection parameters are read from environment variables (`MONGODB_HOST`, `MONGODB_PORT`, `MONGODB_DATABASE`, `MONGODB_USERNAME`, `MONGODB_PASSWORD`, `MONGODB_AUTH_DB`), which the Helm chart injects into the pod from the `app.mongodb.*` keys in `values.yaml`. The application itself stores no secrets in its image.
 
@@ -354,7 +354,7 @@ The setup procedure below describes the full path that brings up the cluster, in
 
 #### Step 1 - Clone the repository
 
-The repository is hosted on GitHub and can be obtained through a regular `git clone`. All subsequent commands are issued from inside the cloned directory. Or you can used files zip file from assignement.
+The repository is hosted on GitHub and can be obtained through a regular `git clone`. All subsequent commands are issued from inside the cloned directory. Or you can use files from the ZIP archive.
 
 ```bash
 git clone https://github.com/K-o-m-A/fiit-cloud.git
@@ -472,17 +472,17 @@ The experiment is considered successful when all four properties below hold:
 
 The operator is configured through annotations on the `quote-app` deployment in the `apps` namespace. The thresholds are deliberately low so that a single `busybox` load generator is enough to push the system past the scale-up threshold:
 
-| Annotation | Value |
-|---|---|
-| `min-replicas` | `1` |
-| `max-replicas` | `5` |
-| `scale-up-step` / `scale-down-step` | `1` / `1` |
-| `scale-up-cooldown` / `scale-down-cooldown` | `30 s` / `60 s` |
-| `cpu-enabled` | `false` |
-| `mem-enabled` | `false` |
-| `rps-enabled` | `true` |
-| `rps-scale-up-threshold` | `10` req/s per pod |
-| `rps-scale-down-threshold` | `2` req/s per pod |
+| Annotation                                  | Value              |
+| ------------------------------------------- | ------------------ |
+| `min-replicas`                              | `1`                |
+| `max-replicas`                              | `5`                |
+| `scale-up-step` / `scale-down-step`         | `1` / `1`          |
+| `scale-up-cooldown` / `scale-down-cooldown` | `30 s` / `60 s`    |
+| `cpu-enabled`                               | `false`            |
+| `mem-enabled`                               | `false`            |
+| `rps-enabled`                               | `true`             |
+| `rps-scale-up-threshold`                    | `10` req/s per pod |
+| `rps-scale-down-threshold`                  | `2` req/s per pod  |
 
 Per-pod RPS is computed from the application's own `http_server_requests_seconds_count` counter, scraped every fifteen seconds by `kube-prometheus-stack` through the `ServiceMonitor` shipped with the `quote-app` chart. The operator queries Prometheus with:
 
@@ -532,19 +532,19 @@ The script proceeds through five phases:
 
 The trace below was produced with the patched operator on a fresh `fiit-cloud` Minikube cluster. Only the rows where the replica count changes are shown.
 
-| Phase | t (s) | Replicas | Avg RPS / pod | Event |
-|---|---|---|---|---|
-| Baseline | 0 → 21 | 1 | ≈ 0.2 | - |
-| Scale-up | 10 | 1 | 149.7 | RPS crosses scale-up threshold |
-| Scale-up | **20** | **1 → 2** | 517.3 | **first scale-up** |
-| Scale-up | 51 | 2 → 3 | 701.0 | scale-up cooldown elapsed |
-| Scale-up | 81 | 3 → 4 | 163.7 | scale-up cooldown elapsed |
-| Scale-up | 112 | 4 → 5 | 128.8 | reached `max-replicas` |
-| Load off | - | 5 | - | load generator deleted |
-| Scale-down | 60 | 5 → 4 | 0.2 | RPS below scale-down threshold |
-| Scale-down | 121 | 4 → 3 | 0.3 | scale-down cooldown elapsed |
-| Scale-down | 197 | 3 → 2 | 0.3 | scale-down cooldown elapsed |
-| Scale-down | 257 | 2 → 1 | 0.3 | back to `min-replicas` |
+| Phase      | t (s)  | Replicas  | Avg RPS / pod | Event                          |
+| ---------- | ------ | --------- | ------------- | ------------------------------ |
+| Baseline   | 0 → 21 | 1         | ≈ 0.2         | -                              |
+| Scale-up   | 10     | 1         | 149.7         | RPS crosses scale-up threshold |
+| Scale-up   | **20** | **1 → 2** | 517.3         | **first scale-up**             |
+| Scale-up   | 51     | 2 → 3     | 701.0         | scale-up cooldown elapsed      |
+| Scale-up   | 81     | 3 → 4     | 163.7         | scale-up cooldown elapsed      |
+| Scale-up   | 112    | 4 → 5     | 128.8         | reached `max-replicas`         |
+| Load off   | -      | 5         | -             | load generator deleted         |
+| Scale-down | 60     | 5 → 4     | 0.2           | RPS below scale-down threshold |
+| Scale-down | 121    | 4 → 3     | 0.3           | scale-down cooldown elapsed    |
+| Scale-down | 197    | 3 → 2     | 0.3           | scale-down cooldown elapsed    |
+| Scale-down | 257    | 2 → 1     | 0.3           | back to `min-replicas`         |
 
 The four pass criteria from Section 6.1.1 are all met:
 
@@ -576,19 +576,19 @@ The experiment is considered successful when all four properties below hold:
 
 #### 6.2.2 Setup
 
-| Annotation | Value | Rationale |
-|---|---|---|
-| `min-replicas` | `1` | lower bound |
-| `max-replicas` | `5` | upper bound |
-| `scale-up-step` / `scale-down-step` | `1` / `1` | one replica per event |
-| `scale-up-cooldown` / `scale-down-cooldown` | `30 s` / `60 s` | tightened relative to the production defaults for an observable demo |
-| `cpu-enabled` | `true` | CPU is the primary driver |
-| `cpu-scale-up-threshold` | `75 %` | conventional HPA-style default |
-| `cpu-scale-down-threshold` | `25 %` | drops to near zero when load stops, so easily reached |
-| `mem-enabled` | `true` | memory is a guardrail |
-| `mem-scale-up-threshold` | `95 %` | only acts as a trigger under genuine memory pressure |
-| `mem-scale-down-threshold` | `90 %` | JVM idle baseline of ≈ 65–75 % is comfortably below 90 %, allowing memory's scale-down vote to fire |
-| `rps-enabled` | `false` | RPS is explicitly disabled in this experiment |
+| Annotation                                  | Value           | Rationale                                                                                           |
+| ------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------- |
+| `min-replicas`                              | `1`             | lower bound                                                                                         |
+| `max-replicas`                              | `5`             | upper bound                                                                                         |
+| `scale-up-step` / `scale-down-step`         | `1` / `1`       | one replica per event                                                                               |
+| `scale-up-cooldown` / `scale-down-cooldown` | `30 s` / `60 s` | tightened relative to the production defaults for an observable demo                                |
+| `cpu-enabled`                               | `true`          | CPU is the primary driver                                                                           |
+| `cpu-scale-up-threshold`                    | `75 %`          | conventional HPA-style default                                                                      |
+| `cpu-scale-down-threshold`                  | `25 %`          | drops to near zero when load stops, so easily reached                                               |
+| `mem-enabled`                               | `true`          | memory is a guardrail                                                                               |
+| `mem-scale-up-threshold`                    | `95 %`          | only acts as a trigger under genuine memory pressure                                                |
+| `mem-scale-down-threshold`                  | `90 %`          | JVM idle baseline of ≈ 65–75 % is comfortably below 90 %, allowing memory's scale-down vote to fire |
+| `rps-enabled`                               | `false`         | RPS is explicitly disabled in this experiment                                                       |
 
 CPU and memory utilisations are computed by the metrics collector as documented in Section 4.3 (`Σ usage / Σ requests × 100`). The `quote-app` deployment must have `resources.requests` set on both CPU and memory, which it does by default in the Helm chart (`requests.cpu=250m`, `requests.memory=256Mi`); otherwise the affected metric would be marked inactive by the `-1` sentinel and the corresponding vote would not contribute to the decision.
 
@@ -658,10 +658,10 @@ Compared to Experiment 1 (RPS-driven scaling), the resource-based configuration 
 
 The two practical issues this experiment exposes - delayed reaction time and a sticky memory floor - are not specific to our operator; they are inherent properties of resource-based scaling applied to JVM applications.
 
-| Difficulty | Root cause | Effect on autoscaling |
-|---|---|---|
+| Difficulty                                       | Root cause                                                                                                                                                  | Effect on autoscaling                                                                                                                                                          |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Memory utilisation remains ≥ 65 % even when idle | The JVM holds onto whatever heap it has grown into, releasing it only under sustained idle and only if the chosen garbage collector supports heap shrinking | With the conventional `mem-scale-down-threshold=20 %`, scale-down can never satisfy memory's vote in practice; the operator stays at the high-water replica count indefinitely |
-| Scale-up onset is delayed relative to traffic | CPU is a second-order signal - requests have to saturate the application before CPU rises | Visible user-facing latency during the surge; capacity arrives after the bottleneck, not before |
+| Scale-up onset is delayed relative to traffic    | CPU is a second-order signal - requests have to saturate the application before CPU rises                                                                   | Visible user-facing latency during the surge; capacity arrives after the bottleneck, not before                                                                                |
 
 Two design responses are visible in this experiment. First, the **per-metric enable/disable flags** (`cpu-enabled`, `mem-enabled`, `rps-enabled`) make it possible to opt the unreliable metric out entirely - a `rps-enabled=true / cpu-enabled=false / mem-enabled=false` configuration (Experiment 1) sidesteps both issues. Second, the **independence of thresholds** in our operator (the `*-scale-up` and `*-scale-down` annotations are independent integers per metric) makes it possible to *shift the operating window* of a problematic metric so that it functions as a guardrail rather than a primary driver, which is what the `mem-scale-up-threshold=95 / mem-scale-down-threshold=90` values do for memory in this experiment.
 
