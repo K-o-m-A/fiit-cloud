@@ -133,16 +133,24 @@ startupProbe:
   failureThreshold: 30
 livenessProbe:
   httpGet:
-    path: /
+    path: /actuator/health
     port: http
+  periodSeconds: 10
+  failureThreshold: 3
   periodSeconds: 10
   failureThreshold: 3
 readinessProbe:
   httpGet:
-    path: /
+    path: /actuator/health
     port: http
-  periodSeconds: 10
+  periodSeconds: 5
   failureThreshold: 3
+startupProbe:
+  httpGet:
+    path: /actuator/health
+    port: http
+  periodSeconds: 5
+  failureThreshold: 60
 
 # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
 autoscaling:
