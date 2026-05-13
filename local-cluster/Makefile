@@ -237,6 +237,8 @@ start-cluster: ## Start the fiit-cloud minikube cluster (4 CPU / 4096MB RAM)
 		--cpus=$(CPUS) \
 		--wait=all
 	@kubectl config use-context $(CLUSTER_NAME)
+	@echo ">>> Enabling metrics-server addon (required by autoscaler-operator)..."
+	@minikube addons enable metrics-server --profile=$(CLUSTER_NAME)
 	@echo "  ✔ Cluster '$(CLUSTER_NAME)' started"
 
 .PHONY: stop-cluster
