@@ -8,9 +8,19 @@
 
 The goal of this project is to design and implement a custom Kubernetes operator, named `autoscaler-operator`, that performs horizontal automatic scaling of containerized applications running on a Kubernetes cluster. Rather than reusing the built-in `HorizontalPodAutoscaler` (HPA) controller, we deliberately build our own implementation so that we can explore the algorithmic core of autoscaling, the integration surface against the Kubernetes API.
 
-The implementation contains all of the moving parts that one would expect from a production-grade Kubernetes operator: a reconciliation loop driven by `controller-runtime`, a label-based watch predicate, a dedicated metrics collector, an isolated pure-function decision engine, and a Helm chart that packages everything together with the appropriate role-based access control.
+The implementation contains all of the parts that one would expect from a production-grade Kubernetes operator: a reconciliation loop driven by `controller-runtime`, a label-based watch predicate, a dedicated metrics collector, an isolated pure-function decision engine, and a Helm chart that packages everything together with the appropriate role-based access control.
 
 To make the success of the project measurable, we tie the documentation to a concrete experimental goal. The operator supports three independent scaling signals - CPU utilisation, memory utilisation, and per-pod requests per second (RPS) - that can be enabled in any combination through annotations on the watched `Deployment`. When the demo application `quote-app` is subjected to a synthetic HTTP load, the operator must increase the replica count within sixty seconds of the moment the active scaling metric crosses its configured scale-up threshold. Conversely, once the load has subsided and the configured `scale-down-cooldown` has elapsed, the operator must return the deployment to its `min-replicas` value. Throughout this entire process the operator must respect the upper and lower replica bounds, and it must not produce visible oscillations in which a scale-up event is immediately followed by a scale-down on the same workload. These four properties together form the measurable goal of the experiment described in Section 6.
+
+### 1.1 Project work distribution
+
+When working on this project, we divided the work as follows:
+
+- **Adrián Komanek** - infrastructure and packaging. Owned the cross-platform `local-cluster/Makefile`, the Terraform stack for the FIIT/SAV OpenStack environment, and and Helm charts.
+- **Darius-Dušan Horvath** - backend application and database. Authored the Spring Boot `quote-app` service, designed the MongoDB schema and the Mongock seed migration.
+- **Frederik Duvač and Peter Farkaš** - Go operator. Jointly implemented the `autoscaler-operator` codebase: the controller-runtime reconciler, the annotation-driven configuration model and the metrics collector.
+
+Documentation, integration testing, and the experiment in Section 6 were carried out jointly.
 
 ---
 
@@ -32,7 +42,7 @@ Horizontal autoscaling on Kubernetes is not a new problem and several mature sol
 
 **KEDA** extends HPA with event-based scalers (Kafka lag, RabbitMQ queue depth, Prometheus queries). It is more powerful than what we need; writing our own small operator instead lets us expose the control loop and the decision algorithm directly and test them in isolation.
 
-**Cluster Autoscaler** and **Karpenter** also come up in the same conversations, but they scale *nodes*, not pods, so they solve a different problem and would actually complement our operator in a fully equipped cluster.
+**Cluster Autoscaler** and **Karpenter** also come up, but they scale *nodes*, not pods, so they solve a different problem and would actually complement our operator in a fully equipped cluster.
 
 What sets our solution apart is the combination of six deliberate design choices:
 
@@ -49,7 +59,7 @@ What sets our solution apart is the combination of six deliberate design choices
 
 ### 4.1 Base diagram
 
-The diagram below captures, at a glance, the relationship between the user, the Kubernetes API server, etcd, the autoscaler operator, the two metric sources (Metrics Server for CPU/memory and Prometheus for request rate), the watched deployment, and the pods that ultimately serve user traffic.
+The diagram below captures, the relationship between the user, the Kubernetes API server, etcd, the autoscaler operator, the two metric sources (Metrics Server for CPU/memory and Prometheus for request rate), the watched deployment, and the pods that ultimately serve user traffic.
 
 ```mermaid
 flowchart TD
@@ -100,7 +110,7 @@ flowchart TD
     class MS,PROM metrics;
 ```
 
-Everything inside the outer box runs inside a single Kubernetes cluster. The boxes labeled `namespace: …` show which namespace each component lives in, which matches the runtime layout from the deployment view in the next subsection.
+Everything inside the outer box runs inside a single Kubernetes cluster. The boxes labeled `namespace:` show which namespace each component lives in, which matches the runtime layout from the deployment view in the next subsection.
 
 The flow has three main loops:
 
@@ -108,43 +118,45 @@ The flow has three main loops:
 - **The resource-metrics loop (left).** Each pod's kubelet exposes per-container CPU and memory usage; the **Metrics Server** aggregates those readings cluster-wide every thirty seconds. On every reconciliation tick the operator's metrics collector queries `metrics.k8s.io` and converts the raw usage into percentages of the pod's declared `resources.requests`.
 - **The application-metrics loop (right).** Each `quote-app` pod exposes a Prometheus-format counter `http_server_requests_seconds_count` on `/actuator/prometheus`. A `ServiceMonitor` shipped with the `quote-app` chart registers the pods with `kube-prometheus-stack`, which scrapes them every fifteen seconds. On every reconciliation tick the operator issues an instant PromQL query to Prometheus and obtains the per-pod request rate averaged across replicas.
 
-The **autoscaler-operator** combines whichever of these three signals are enabled for the workload, runs the decision algorithm (Section 4.3), and - when scaling is required - patches `spec.replicas` on the `Deployment`. The Kubernetes scheduler then creates or removes pods to match the new desired count.
+The **autoscaler-operator** combines whichever of these three signals are enabled for the workload, runs the decision algorithm (Section 4.3), and - when scaling is required patches `spec.replicas` on the `Deployment`. The Kubernetes scheduler then creates or removes pods to match the new desired count.
 
-Crucially, **the operator never sees a `Deployment` unless it carries the label `autoscaler.fiit-cloud.io/enabled=true`.** A controller-runtime *predicate* filters the watch stream at the source, so any deployment without the label is invisible to the reconciler and costs zero CPU cycles. This is the entire opt-in mechanism: setting a label enrols a workload; removing it un-enrols it. The opt-in is described in detail in Section 4.3.
+Crucially, **the operator never sees a `Deployment` unless it carries the label `autoscaler.fiit-cloud.io/enabled=true`.** A controller-runtime *predicate* filters the watch stream at the source, so any deployment without the label is invisible to the reconciler and costs zero CPU cycles. This is the entire opt-in mechanism: setting a label enrols a workload; removing it un-enrols it.
 
 
 ### 4.2 Architectural views
 
-**Deployment view.** At runtime the cluster contains three functionally separated namespaces:
+**Deployment view.** 
+
+At runtime the cluster contains three functionally separated namespaces:
 
 - `apps` - the demo workload `quote-app` together with its MongoDB instance, provisioned through the Bitnami chart that the application's chart declares as a dependency.
-- `autoscaler-system` - the operator itself, deployed as a single-replica `Deployment`. The operator code contains support for leader election, but this feature is disabled by default in the demo, since a single instance is sufficient.
-- `monitoring` - the `kube-prometheus-stack` release, which brings in Prometheus, Grafana, Alertmanager, and a set of node and Kubernetes-level exporters. The Metrics Server addon is conceptually part of the monitoring layer too, but by convention it lives in `kube-system`.
+- `autoscaler-system` - the operator itself, deployed as a single-replica `Deployment`. The operator code contains support for leader election, but this feature is disabled by default.
+- `monitoring` - the `kube-prometheus-stack` release, which brings in Prometheus, Grafana, Alertmanager, and a set of node and Kubernetes-level exporters. The Metrics Server addon is conceptually part of the monitoring layer too, but by default it lives in `kube-system`.
 
 The operator communicates with the cluster exclusively through the Kubernetes API server and keeps no durable state outside of it, which makes its lifecycle entirely stateless.
 
-**Process view.** At runtime the operator's behavior is governed by a single reconciliation loop. The loop is fired either by an event from the Kubernetes informer cache - which only delivers events for deployments that pass the label predicate - or by the periodic resync timer whose period is configured through the `--sync-period` flag with a default of thirty seconds. Each iteration proceeds through the following steps:
+**Process view.** 
+
+At runtime the operator's behavior is governed by a single reconciliation loop. The loop is fired either by an event from the Kubernetes informer cache or by the periodic resync timer whose period is configured through the `--sync-period` flag with a default of 30 seconds. Each iteration proceeds through the following steps:
 
 1. Load the latest version of the deployment from the cache.
-2. Parse its annotations into a strongly typed configuration object.
+2. Parse its annotations into a typed configuration object.
 3. Ask the metrics collector for a fresh snapshot. The collector populates three fields: CPU and memory utilisation (from Metrics Server) and per-pod request rate (from Prometheus, if the `--prometheus-url` flag is set). Each field uses the sentinel value `-1` when its source is unavailable or the corresponding metric is disabled.
 4. Hand the snapshot to the pure function `scaler.Evaluate`, which returns a `Decision` (scale up, scale down, or hold).
 5. If the decision is to scale, apply a strategic merge patch to `spec.replicas`, emit a Kubernetes `Event`, and update the in-memory cooldown timestamps.
 6. Return a `RequeueAfter` hint that schedules the next evaluation, ensuring that the system continues to react even in the absence of external events.
 
-**Component view.** Internally the operator is decomposed into a small number of Go packages, each of which has a single responsibility:
+**Component view.** 
 
-- `cmd/main.go` - bootstraps the operator, parses command-line flags (including `--prometheus-url`), registers the necessary API schemes, and wires the reconciler into the controller-runtime manager.
+Internally the operator is decomposed into a small number of Go packages, each of which has a single responsibility:
+
+- `cmd/main.go` - bootstraps the operator, parses command-line flags, registers the necessary API schemes, and wires the reconciler into the controller-runtime manager.
 - `pkg/controller` - contains all Kubernetes-aware code: the reconciler itself, the parsing and validation of annotation-driven configuration, the label-predicate function used by the watch builder, and the string constants that define the label and annotation keys.
 - `pkg/metrics` - encapsulates communication with the `metrics.k8s.io/v1beta1` API, computes percent utilisation values from raw usage and request data, and orchestrates the RPS query against Prometheus.
-- `pkg/prometheus` - a minimal HTTP client for the Prometheus instant-query API (`/api/v1/query`). Used by the metrics collector to fetch per-pod request rate; uses only the Go standard library.
+- `pkg/prometheus` - a minimal HTTP client for the Prometheus instant-query API (`/api/v1/query`). Used by the metrics collector to fetch per-pod request rate.
 - `pkg/scaler` - contains the pure decision function and is intentionally kept free of any Kubernetes dependency so that it can be tested in isolation.
 
 ### 4.3 Technical analysis of the chosen technology
-
-The technological foundation of the operator is the Kubernetes Operator pattern, originally described by CoreOS in 2016 and since adopted as the standard way to encode operational knowledge as software inside the Kubernetes ecosystem. At its core, the pattern combines two elements: a resource, which is the declarative object that captures the user's intent, and a controller, which is a long-running process that observes the state of those resources through the watch API and continuously drives the cluster toward the declared desired state. In most operators the resource is a custom resource defined through a `CustomResourceDefinition`, but in our case we deliberately chose to use the existing `Deployment` resource and to attach the operator's configuration to it through a label and a set of annotations. This decision keeps the user-facing model simple and avoids the operational overhead of installing CRDs.
-
-The operator is built on top of the [`controller-runtime`](https://pkg.go.dev/sigs.k8s.io/controller-runtime) library, which is the same library that underpins the kubebuilder framework and a large fraction of the open-source operator ecosystem. Controller-runtime provides several building blocks that are essential for the operator. The *manager* bootstraps the HTTP metrics endpoint, the shared client, and the lifecycle hooks. The *cache* maintains an informer-driven view of cluster state with the configured `SyncPeriod`, which makes it efficient to perform `List` and `Get` operations from the reconciler without overloading the API server. The *predicate* mechanism lets the operator narrow down the set of events it reacts to, which is how the operator restricts itself to deployments that carry the opt-in label `autoscaler.fiit-cloud.io/enabled=true`. Finally, the *builder* ties everything together by registering the reconciler against a concrete resource type, in our case `appsv1.Deployment`.
 
 #### Labeling mechanism - how a workload is discovered
 
@@ -157,27 +169,24 @@ labelSelector := predicate.NewPredicateFuncs(func(obj client.Object) bool {
 })
 ```
 
-`LabelEnabled` is the constant `autoscaler.fiit-cloud.io/enabled`. A `Deployment` that does not carry this label, or carries it with any value other than `"true"`, is dropped at the source - the reconciler never sees it. This has three practical consequences:
+`LabelEnabled` is the constant `autoscaler.fiit-cloud.io/enabled`. A `Deployment` that does not carry this label, or carries it with any value other than `"true"`, is dropped at the source. This has three practical consequences:
 
 1. **Opt-in is explicit.** The operator never scales a workload its owner did not enroll. Removing the label immediately removes the workload from the reconcile queue.
 2. **Cluster-wide cost is bounded.** The watch stream is filtered before any business logic runs, so adding an unlabeled deployment costs nothing for the operator.
 3. **Configuration lives with the workload.** Because the label is on the `Deployment` itself, the scaling policy moves, is backed up, and is deleted together with the workload. There is no separate `HorizontalPodAutoscaler` object to keep in sync, as there is with stock HPA.
 
-The opt-in label is the *switch*; the fine-grained tuning (replica bounds, step sizes, cooldowns, per-metric thresholds and enable flags) is expressed through annotations on the same `Deployment`. Labels are indexed by the API server and intended for selection, so they are the right place for the on/off bit. Annotations are not indexed and can hold free-form strings, so they are the right place for parameter values. The full annotation table is given in Section 5.2.
 
 #### Decision algorithm (`scaler.Evaluate`)
 
-The decision algorithm is implemented as a single function `scaler.Evaluate` that takes an `Input` struct and returns a `Decision`. The input bundles the current replica count, the timestamps of the last scale-up and scale-down events, the lower and upper replica bounds, the scale step sizes for both directions, the cooldown durations expressed in seconds, the enable flag and thresholds for each of the three metrics - CPU utilisation, memory utilisation, and per-pod RPS - and a snapshot of the observed values. The output is a structured value containing the chosen direction (`ScaleUp`, `ScaleDown`, or `Hold`), the proposed new replica count, and a list of human-readable `Reason` records that explain why this direction was chosen.
+The decision algorithm is implemented as a single function `scaler.Evaluate` that takes an `Input` struct and returns a `Decision`. The input bundles the current replica count, the timestamps of the last scale-up and scale-down events, the lower and upper replica bounds, the scale step sizes for both directions, the cooldown durations in seconds, the enable flag and thresholds for each of the three metrics - CPU utilisation, memory utilisation, and per-pod RPS and a snapshot of the observed values. The output is a structured value containing the chosen direction (`ScaleUp`, `ScaleDown`, or `Hold`), the proposed new replica count, and a list of `Reason` records that explain why this direction was chosen.
 
-A metric is considered *active* in a given reconcile cycle if and only if both of the following hold: the user enabled it through the corresponding `*-enabled` annotation, and the collector successfully obtained a value (i.e. the snapshot field is not the sentinel `-1`). An inactive metric does not vote either way - it does not drive scale-up and does not block scale-down. This lets the operator degrade gracefully: if Prometheus is unreachable, the RPS field drops to `-1`, RPS becomes inactive, and the decision proceeds on CPU and memory alone.
+A metric is considered *active* in a given reconcile cycle if and only if both of the following hold: the user enabled it through the corresponding `*-enabled` annotation, and the collector successfully obtained a value (i.e. the snapshot field is not the sentinel `-1`). An inactive metric does not vote either way. This lets the operator degrade gracefully. If Prometheus is unreachable, the RPS field drops to `-1`, RPS becomes inactive, and the decision proceeds on CPU and memory alone.
 
 The function then follows three rules in strict order:
 
 1. **Scale-up** - if at least one active metric has crossed its scale-up threshold, the function attempts to scale up. Two guards apply: if the deployment is already at `MaxReplicas`, or if the scale-up cooldown has not yet elapsed since the last scale-up, the verdict is downgraded to `Hold` and the guard is recorded in the reason list. Otherwise the desired replica count is `min(CurrentReplicas + ScaleUpStep, MaxReplicas)`, which ensures that a single decision cannot push the deployment above its upper bound. The asymmetry here is deliberate: even a single overheating metric is enough to trigger growth, because the cost of withholding capacity under load is greater than the cost of an extra pod.
-2. **Scale-down** - if no metric is signaling upward pressure and *every* active metric is below its scale-down threshold (the unanimous-vote rule), the function attempts to scale down. The two analogous guards apply: the deployment must not be at `MinReplicas`, and the scale-down cooldown must have elapsed. The desired replica count is `max(CurrentReplicas - ScaleDownStep, MinReplicas)`.
-3. **Hold** - in every other case - mixed signals, no active metrics, recent activity within a cooldown window, or all observed values inside the deadband between scale-down and scale-up thresholds - the function returns `Hold` and the reconciler simply waits for the next cycle.
-
-The unanimous-vote requirement on scale-down is what gives the algorithm its conservative bias and what makes it noticeably less prone to flapping than a naive any-metric-below-threshold rule. With three metrics enabled, a single short-lived dip in one of them (for example a GC pause that briefly lowers memory utilisation) is *not* sufficient to remove a replica; the other two have to agree.
+2. **Scale-down** - if no metric is signaling upward pressure and *every* active metric is below its scale-down threshold , the function attempts to scale down. The two analogous guards apply: the deployment must not be at `MinReplicas`, and the scale-down cooldown must have elapsed. The desired replica count is `max(CurrentReplicas - ScaleDownStep, MinReplicas)`.
+3. **Hold** - in every other case - mixed signals, no active metrics, recent activity within a cooldown window, the function returns `Hold` and the reconciler simply waits for the next cycle.
 
 
 #### Utilisation computation (CPU and memory)
@@ -197,23 +206,15 @@ Several edge cases are handled explicitly:
 
 #### Request-rate computation (RPS)
 
-CPU and memory describe the *resource pressure* that load creates; they are second-order signals. For HTTP services, the load itself - the rate of incoming requests - is usually a more useful and faster signal. The operator therefore supports a third metric: the average per-pod request rate, queried directly from Prometheus.
+CPU and memory describe the *resource pressure* that load creates. For HTTP services, the load itself is usually a more useful and faster signal. The operator therefore supports a third metric, the average per-pod request rate, queried directly from Prometheus.
 
-For this to work, the application has to expose a Prometheus-format counter. The `quote-app` chart enables Spring Boot's `actuator` together with the Micrometer Prometheus registry, which makes the standard counter `http_server_requests_seconds_count{...}` available on the application's HTTP port at `/actuator/prometheus`. A `ServiceMonitor` shipped with the chart registers each pod with `kube-prometheus-stack`, which scrapes the endpoint every fifteen seconds.
+For this to work, the application has to expose a Prometheus-format counter. The `quote-app` chart enables Spring Boot's `actuator` together with the Micrometer Prometheus registry, which makes the standard counter `http_server_requests_seconds_count` available on the application's HTTP port at `/actuator/prometheus`. A `ServiceMonitor` shipped with the chart registers each pod with `kube-prometheus-stack`, which scrapes the endpoint every fifteen seconds.
 
 On every reconcile tick the metrics collector composes the following instant query (`namespace` and `deploymentName` come from the watched object):
 
 ```
 avg(sum by (pod) (rate(http_server_requests_seconds_count{namespace="<NS>",pod=~"<DEP>-.*"}[1m])))
 ```
-
-Read from the inside out: `rate(...[1m])` converts the cumulative counter into requests per second over the last minute; `sum by (pod)` collapses the per-URI and per-status lines into a single number for each pod; the outer `avg(...)` then averages across replicas. The result is exactly the value the operator stores in `snap.AvgRPS` and compares against `rps-scale-up-threshold` and `rps-scale-down-threshold`.
-
-A few notes on the design:
-
-- **Per-pod rather than total.** Choosing `avg` over `sum` means the threshold value is a property of a single pod's capacity, independent of how many replicas exist. When more replicas are added, the same client load is divided across them, and each pod's measured RPS drops correspondingly.
-- **Failure is non-fatal.** If Prometheus is unreachable, the operator logs the error, leaves `AvgRPS = -1`, and continues with CPU and memory. RPS-based scaling is opt-in through `rps-enabled` and through the operator-level `--prometheus-url` flag; either one being unset makes RPS inactive.
-- **`PodCount` fallback.** Resource metrics and request metrics use independent data paths. The collector counts running pods directly from the Kubernetes API as a fallback so that RPS-only scaling still works when Metrics Server is unavailable.
 
 ---
 
@@ -233,9 +234,9 @@ The solution also makes three explicit assumptions about the environment in whic
 
 - The cluster has a working Metrics Server. Without it the CPU and memory snapshot fields drop to `-1` and the operator falls back to whichever other metrics are active; if no metric is active it simply holds the current replica count.
 - The workload being scaled has `resources.requests` set for both CPU and memory. Without them the percentage computation has no denominator and the operator treats the affected metric as inactive.
-- For RPS-based scaling, the cluster runs Prometheus (or a compatible instant-query endpoint) reachable at the URL passed via the operator's `--prometheus-url` flag, and the workload exposes a counter `http_server_requests_seconds_count` that Prometheus scrapes. If either piece is missing, RPS becomes inactive and CPU/memory continue to drive scaling.
-
-All three assumptions are easy to satisfy in a typical cluster and are explicitly verified during the setup procedure; they are also considered best practice for running Kubernetes.
+- For RPS-based scaling, the cluster runs Prometheus reachable at the URL passed via the operator's `--prometheus-url` flag, and the workload exposes a counter `http_server_requests_seconds_count` that Prometheus scrapes. 
+- 
+All three assumptions are easy to satisfy in a typical cluster and are explicitly verified during the setup procedure. First two are also considered best practice for running Kubernetes.
 
 ### 5.2 The autoscaler-operator component
 
@@ -253,7 +254,7 @@ The operator is built around a small number of types:
 
 #### Annotation-based configuration
 
-From the user's point of view, opting a workload into autoscaling is a matter of setting a single label and a small number of annotations on the deployment. The label `autoscaler.fiit-cloud.io/enabled` must be set to the literal string `"true"`; any other value, or the absence of the label, will cause the predicate in the operator's watch configuration to filter the deployment out, and no reconciliation will take place. Once the label is set, the user can fine-tune the operator's behavior by setting a number of annotations. Sensible defaults are provided for every annotation except `max-replicas`, which is required because there is no reasonable default for an upper bound on replica count.
+From the user's point of view, opting a workload into autoscaling is a matter of setting a single label and a small number of annotations on the deployment. The label `autoscaler.fiit-cloud.io/enabled` must be set to the literal string `"true"`. Any other value, or the absence of the label, will cause the predicate in the operator's watch configuration to filter the deployment out, and no reconciliation will take place. Once the label is set, the user can fine-tune the operator's behavior by setting a number of annotations. Sensible defaults are provided for every annotation except `max-replicas`, which is required because there is no reasonable default for an upper bound on replica count.
 
 ```yaml
 metadata:
@@ -315,8 +316,40 @@ flowchart TD
     class J,K,L action;
 ```
 
-### 5.3 Step-by-step setup of the whole system
+### 5.3 Backend application `quote-app` and MongoDB
 
+The application is a Spring Boot 3.4 service running on Java 21. It exposes a single business endpoint, `GET /quote`, which selects one document from the `quotes` MongoDB collection uniformly at random and returns it as JSON in the shape `{"value": "<text>"}`. The whole code base is intentionally minimal - a `QuoteController`, a `QuoteService`, a Spring Data `QuoteRepository`, and a `Quote` entity annotated with `@Document(collection = "quotes")` - so that the resource cost per request is dominated by HTTP and JSON handling rather than by application logic. This keeps the relationship between request rate, CPU usage, and memory usage predictable, which is important when interpreting the autoscaler's behavior.
+
+Beyond the business endpoint, the service exposes the Spring Boot Actuator endpoints `/actuator/health`, `/actuator/info`, and `/actuator/prometheus`. The first two drive the Kubernetes startup, liveness, and readiness probes defined in the chart, all of which hit `/actuator/health`. The third is the key integration point with the rest of the monitoring stack: it is served by `micrometer-registry-prometheus` and publishes the standard Spring Boot HTTP metric `http_server_requests_seconds_count`, tagged with `application=mudro-dna-be` so that it can be filtered cleanly in Prometheus queries.
+
+The application's most important pom dependencies are:
+
+| Dependency | Role |
+|---|---|
+| `spring-boot-starter-web` | REST endpoint, embedded Tomcat |
+| `spring-boot-starter-data-mongodb` | Spring Data repository support for MongoDB |
+| `spring-boot-starter-actuator` | health, info, and prometheus endpoints |
+| `micrometer-registry-prometheus` | Prometheus exposition of HTTP metrics |
+| `io.mongock:mongock-springboot-v3` + `mongodb-springdata-v4-driver` | versioned database migrations |
+| `org.projectlombok:lombok` | boilerplate elimination on entities and DTOs |
+
+All MongoDB connection parameters are read from environment variables (`MONGODB_HOST`, `MONGODB_PORT`, `MONGODB_DATABASE`, `MONGODB_USERNAME`, `MONGODB_PASSWORD`, `MONGODB_AUTH_DB`), which the Helm chart injects into the pod from the `app.mongodb.*` keys in `values.yaml`. The application itself stores no secrets in its image.
+
+#### 5.3.2 The MongoDB backing store
+
+The database itself is deliberately simple. A single database named `quote` holds a single collection named `quotes`. Each document has only two fields, an `_id` of type ObjectId and a `quote` field of type string. The schema is described in code by the `Quote` entity:
+
+```java
+@Document(collection = "quotes")
+public class Quote {
+    @Id private String id;
+    private String quote;
+}
+```
+
+Because the chart sets `replicaCount: 1` on the MongoDB sub-chart, there is no replica set and no sharding; this matches the project's focus on stateless-workload scaling rather than on database elasticity.
+
+### 5.4 Step-by-step setup of the whole system
 The setup procedure below describes the full path that brings up the cluster, installs the monitoring stack, deploys the demo application, installs the operator, and enables autoscaling on the demo workload. The procedure assumes a Linux, macOS, or Windows machine with the usual developer tooling available, including `bash`, `make`, `git`, and Docker Desktop; on Windows the procedure has also been verified inside WSL.
 
 #### Step 1 - Clone the repository
@@ -417,6 +450,7 @@ kubectl get nodes
 ```
 
 At the time of writing, the SAV OpenStack environment exhibits slow disk I/O that causes the `kubeadm init` step to fail intermittently, which is why the project is primarily demonstrated on a local Minikube cluster.
+
 ---
 
 ## 6. Experiment
@@ -470,7 +504,7 @@ kubectl port-forward -n monitoring svc/prometheus-stack-kube-prom-prometheus 909
 ./requestLoadTest.sh
 ```
 
-The script writes the same trace it prints to stdout into a file named `rps-experiment-YYYYMMDD-HHMMSS.log` in the current directory, and the path is echoed in the final summary block. The script is idempotent - re-running it overwrites the annotations on `quote-app`, deletes any leftover `load-gen` pod from a previous run, and starts from a clean baseline. A `trap` on exit removes the load generator even when the script is interrupted, so a partial run will not leave artificial traffic flowing.
+The script writes the same trace it prints to stdout into a file named `rps-experiment-YYYYMMDD-HHMMSS.log` in the current directory, and the path is echoed in the final summary block. Re-running the scripts overwrites the annotations on `quote-app`, deletes any leftover `load-gen` pod from a previous run, and starts from a clean baseline. A `trap` on exit removes the load generator even when the script is interrupted, so a partial run will not leave artificial traffic flowing.
 
 Two optional knobs are available without editing the script:
 
@@ -496,7 +530,7 @@ The script proceeds through five phases:
 
 #### 6.1.5 Results
 
-The trace below was produced with the patched operator on a fresh `fiit-cloud` Minikube cluster on 2026-05-13. Only the rows where the replica count changes are shown - the full sampling trace is in `rps-experiment-20260513-161348.log`.
+The trace below was produced with the patched operator on a fresh `fiit-cloud` Minikube cluster. Only the rows where the replica count changes are shown.
 
 | Phase | t (s) | Replicas | Avg RPS / pod | Event |
 |---|---|---|---|---|
@@ -521,17 +555,15 @@ The four pass criteria from Section 6.1.1 are all met:
 
 #### 6.1.6 Discussion
 
-A few qualitative observations are worth recording. The first is that the per-pod RPS visibly *decreases* as replicas are added - from ≈ 700 req/s per pod at two replicas down to ≈ 130 req/s per pod at five - because the same client load is being spread across more pods by the Kubernetes service. This is the behavior that justifies measuring *per-pod* rather than *total* RPS: the scale-up threshold is a property of a single pod's capacity, and the scale-down threshold fires correctly once the load is gone regardless of how many pods existed at that moment.
+A few qualitative observations are worth recording. The first is that the per-pod RPS visibly *decreases* as replicas are added - from ≈ 700 req/s per pod at two replicas down to ≈ 130 req/s per pod at five,because the same client load is being spread across more pods by the Kubernetes service. This is the behavior that justifies measuring *per-pod* rather than *total* RPS: the scale-up threshold is a property of a single pod's capacity, and the scale-down threshold fires correctly once the load is gone regardless of how many pods existed at that moment.
 
 The second observation concerns the scale-down trajectory. With a sixty-second `scale-down-cooldown` and a step size of one, scaling from five back to one takes at least four cooldown windows - the observed 257 s matches this lower bound almost exactly. Operators that want a faster recovery should either increase `scale-down-step` or shorten the cooldown; the trade-off is increased sensitivity to short-lived dips in traffic.
 
 The third observation is operational. Beyond the numeric metrics, the experiment provides qualitative insight into how the operator behaves under load. By tailing the operator's log in real time, one can read off the precise reason that triggered each scaling decision: each log line emitted at scale-up or scale-down time contains a serialized `Decision` that lists the metrics involved, the observed values, and the thresholds that were crossed. Kubernetes events recorded on the deployment provide a more durable trail of the same information and can be retrieved at any time with `kubectl describe deploy quote-app -n apps`. Together, the log and the event stream are sufficient to reconstruct the entire history of an experiment and to diagnose any unexpected behavior.
 
-A final note on a defect discovered while preparing this experiment: the original metrics collector aborted the entire snapshot when `metrics.k8s.io` was unavailable, which left `PodCount=0` and prevented the RPS path from running even when CPU/memory were disabled. The collector was patched to compute `PodCount` from the running pod list as a fallback and to query Prometheus independently of the resource-metrics path. The results above were obtained with the patched operator.
-
 ### 6.2 Experiment 2 - Scaling based on CPU and memory utilisation
 
-This experiment exercises the operator in its resource-based configuration. The RPS signal is explicitly disabled (`rps-enabled=false`), so the only inputs that can move `spec.replicas` are the CPU and memory utilisation percentages obtained from the Kubernetes Metrics Server. The goal is to demonstrate that the same operator can drive purely resource-based scaling - the model exposed by the stock HPA - and to make visible two structural difficulties that resource-based scaling has on JVM workloads such as `quote-app`.
+This experiment exercises the operator in its resource-based configuration. The RPS signal is explicitly disabled (`rps-enabled=false`), so the only inputs that can move `spec.replicas` are the CPU and memory utilisation percentages obtained from the Kubernetes Metrics Server. The goal is to demonstrate that the same operator can drive purely resource-based scaling and to make visible two structural difficulties that resource-based scaling has on JVM workloads such as `quote-app`.
 
 #### 6.2.1 Goal and pass criteria
 
@@ -543,8 +575,6 @@ The experiment is considered successful when all four properties below hold:
 4. No oscillation occurs - scale-up events occur only while load is present, scale-down events only after it is removed; the direction never reverses within a single phase.
 
 #### 6.2.2 Setup
-
-The CPU + memory configuration uses annotations chosen to **account for the way the JVM manages heap memory**: a Spring Boot application allocates roughly 65–75 % of its memory request as a stable baseline even at idle, so the conventional `mem-scale-down-threshold=20 %` from the stock HPA model is unreachable in practice. To make scale-down possible, the memory window is shifted upward, turning memory into a *guardrail* against extreme pressure rather than a driver. CPU is left at the conventional thresholds because it drops back to near zero whenever load stops.
 
 | Annotation | Value | Rationale |
 |---|---|---|
