@@ -594,12 +594,12 @@ CPU and memory utilisations are computed by the metrics collector as documented 
 
 Two **preconditions on the chart itself** must be met for the experiment to run cleanly under scale-up:
 
-- A `startupProbe` is configured on the application container, with a budget long enough to cover Spring Boot's twenty- to forty-second start-up. Without it the liveness probe - which is checked from the moment the container starts - kills new replicas before they finish initialising and leaves the deployment in `CrashLoopBackOff` during scale-up. The chart that ships with this project includes such a probe (`failureThreshold: 60` × `periodSeconds: 5` = a five-minute startup budget).
+- A `startupProbe` is configured on the application container, with a budget long enough to cover Spring Boot's twenty to forty second start-up. Without it the liveness probe, which is checked from the moment the container starts, kills new replicas before they finish initialising and leaves the deployment in `CrashLoopBackOff` during scale-up. The chart that ships with this project includes such a probe (`failureThreshold: 60` × `periodSeconds: 5` = a five-minute startup budget).
 - The image referenced by the chart exposes the Spring Boot actuator at `/actuator/health` for the probes. Both endpoints are present in `xfarkasp/mudro-dna-be:latest`.
 
 #### 6.2.3 Running the experiment
 
-The experiment uses the same `busybox` load generator as Experiment 1 and the same three observation surfaces (replica count, operator log, metric graphs). The procedure is launched manually because the trade-offs that make CPU + memory scaling interesting are best observed step by step.
+The experiment uses the same `busybox` load generator as Experiment 1 and the same three observation surfaces (replica count, operator log, metric graphs).
 
 ```bash
 # 1. Apply the experiment-specific annotations (CPU + Mem only)
