@@ -30,6 +30,7 @@ func baseInput() scaler.Input {
 			PodCount:             2,
 			AvgCPUUtilizationPct: 40,
 			AvgMemUtilizationPct: 40,
+			AvgRPS:               -1,
 		},
 	}
 }
@@ -182,5 +183,65 @@ func TestMixedMetrics_CPUHighMemLow_ScalesUp(t *testing.T) {
 	// Scale-up takes precedence over scale-down
 	if d.Direction != scaler.ScaleUp {
 		t.Errorf("expected ScaleUp (CPU high wins), got %s: %s", d.Direction, d)
+	}
+}
+
+func rpsInput() scaler.Input {
+	in := baseInput()
+	in.RPSEnabled = true
+	in.RPSScaleUpThreshold = 50
+	in.RPSScaleDownThreshold = 5
+	in.Snapshot.AvgRPS = 20 // between thresholds → no pressure
+	return in
+}
+
+func TestScaleUp_RPSHigh(t *testing.T) {
+	in := rpsInput()
+	in.Snapshot.AvgRPS = 60
+	d := scaler.Evaluate(in)
+	if d.Direction != scaler.ScaleUp {
+		t.Errorf("expected ScaleUp on RPS high, got %s: %s", d.Direction, d)
+	}
+}
+
+func TestScaleDown_AllThreeLow(t *testing.T) {
+	in := rpsInput()
+	in.Snapshot.AvgCPUUtilizationPct = 10
+	in.Snapshot.AvgMemUtilizationPct = 10
+	in.Snapshot.AvgRPS = 1
+	d := scaler.Evaluate(in)
+	if d.Direction != scaler.ScaleDown {
+		t.Errorf("expected ScaleDown when all three metrics low, got %s: %s", d.Direction, d)
+	}
+}
+
+func TestScaleDown_CPUMemLowButRPSMid_Holds(t *testing.T) {
+	in := rpsInput()
+	in.Snapshot.AvgCPUUtilizationPct = 10
+	in.Snapshot.AvgMemUtilizationPct = 10
+	in.Snapshot.AvgRPS = 20 // not below scale-down threshold
+	d := scaler.Evaluate(in)
+	if d.Direction != scaler.Hold {
+		t.Errorf("expected Hold (RPS keeps it active), got %s: %s", d.Direction, d)
+	}
+}
+
+func TestRPSInactive_FallsBackToCPUMem(t *testing.T) {
+	in := rpsInput()
+	in.Snapshot.AvgRPS = -1 // Prometheus unreachable
+	in.Snapshot.AvgCPUUtilizationPct = 10
+	in.Snapshot.AvgMemUtilizationPct = 10
+	d := scaler.Evaluate(in)
+	if d.Direction != scaler.ScaleDown {
+		t.Errorf("expected ScaleDown when RPS inactive and CPU+Mem low, got %s: %s", d.Direction, d)
+	}
+}
+
+func TestRPSDisabled_IgnoresRPS(t *testing.T) {
+	in := baseInput() // RPSEnabled is false by default in baseInput()
+	in.Snapshot.AvgRPS = 9999
+	d := scaler.Evaluate(in)
+	if d.Direction != scaler.Hold {
+		t.Errorf("expected Hold when RPS disabled, got %s: %s", d.Direction, d)
 	}
 }

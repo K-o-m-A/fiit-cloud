@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/controller"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/prometheus"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
@@ -25,12 +26,14 @@ func main() {
 		syncPeriod      time.Duration
 		metricsBindAddr string
 		leaderElect     bool
+		prometheusURL   string
 	)
 
 	flag.StringVar(&watchNamespace, "watch-namespace", "", "Namespace to watch.")
 	flag.DurationVar(&syncPeriod, "sync-period", 30*time.Second, "How often to re-evaluate.")
 	flag.StringVar(&metricsBindAddr, "metrics-bind-address", ":8080", "Metrics endpoint.")
 	flag.BoolVar(&leaderElect, "leader-elect", false, "Enable leader election.")
+	flag.StringVar(&prometheusURL, "prometheus-url", "", "Prometheus base URL for RPS-based scaling. Empty disables RPS.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -72,9 +75,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	var promClient *prometheus.Client
+	if prometheusURL != "" {
+		promClient = prometheus.New(prometheusURL)
+	}
+
 	if err := controller.SetupWithManager(mgr, controller.Options{
-		SyncPeriod:    syncPeriod,
-		MetricsClient: mc,
+		SyncPeriod:       syncPeriod,
+		MetricsClient:    mc,
+		PrometheusClient: promClient,
 	}); err != nil {
 		setupLog.Error(err, "unable to setup autoscaler controller")
 		os.Exit(1)
@@ -83,6 +92,7 @@ func main() {
 	setupLog.Info("starting autoscaler operator",
 		"watchNamespace", watchNamespace,
 		"syncPeriod", syncPeriod,
+		"prometheusURL", prometheusURL,
 	)
 
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {

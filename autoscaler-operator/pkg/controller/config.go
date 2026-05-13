@@ -26,6 +26,10 @@ type DeploymentConfig struct {
 	MemEnabled      bool
 	MemScaleUpPct   int32
 	MemScaleDownPct int32
+
+	RPSEnabled            bool
+	RPSScaleUpThreshold   int32
+	RPSScaleDownThreshold int32
 }
 
 // ParseDeploymentConfig reads annotations from a Deployment and returns the
@@ -51,6 +55,10 @@ func ParseDeploymentConfig(d *appsv1.Deployment) (*DeploymentConfig, error) {
 		MemEnabled:      getBool(ann, AnnotationMemEnabled, true),
 		MemScaleUpPct:   getInt32(ann, AnnotationMemScaleUp, 80),
 		MemScaleDownPct: getInt32(ann, AnnotationMemScaleDown, 20),
+
+		RPSEnabled:            getBool(ann, AnnotationRPSEnabled, false),
+		RPSScaleUpThreshold:   getInt32(ann, AnnotationRPSScaleUp, 100),
+		RPSScaleDownThreshold: getInt32(ann, AnnotationRPSScaleDown, 10),
 	}
 
 	if err := cfg.validate(d.Name); err != nil {
@@ -74,6 +82,10 @@ func (c *DeploymentConfig) validate(name string) error {
 	if c.MemEnabled && c.MemScaleDownPct >= c.MemScaleUpPct {
 		return fmt.Errorf("deployment %q: memory scaleDown threshold (%d) must be < scaleUp (%d)",
 			name, c.MemScaleDownPct, c.MemScaleUpPct)
+	}
+	if c.RPSEnabled && c.RPSScaleDownThreshold >= c.RPSScaleUpThreshold {
+		return fmt.Errorf("deployment %q: RPS scaleDown threshold (%d) must be < scaleUp (%d)",
+			name, c.RPSScaleDownThreshold, c.RPSScaleUpThreshold)
 	}
 	return nil
 }

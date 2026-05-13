@@ -64,6 +64,7 @@ controller:
   syncPeriod: 30s
   metricsBindAddress: ":8080"
   leaderElect: true
+  prometheusUrl: "http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090"
 
 autoscaling:
   enabled: false

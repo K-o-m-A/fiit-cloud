@@ -43,6 +43,7 @@ spec:
             - --sync-period={{ .Values.controller.syncPeriod }}
             - --metrics-bind-address={{ .Values.controller.metricsBindAddress }}
             - --leader-elect={{ .Values.controller.leaderElect }}
+            - --prometheus-url={{ .Values.controller.prometheusUrl }}
           ports:
             - name: metrics
               containerPort: {{ .Values.service.port }}

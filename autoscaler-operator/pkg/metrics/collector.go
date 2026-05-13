@@ -3,14 +3,15 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"sigs.k8s.io/controller-runtime/pkg/log" 
 
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/prometheus"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+	versioned "k8s.io/metrics/pkg/client/clientset/versioned"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-    versioned "k8s.io/metrics/pkg/client/clientset/versioned"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // DeploymentSnapshot is the aggregated metric reading for a single reconcile cycle.
@@ -25,40 +26,51 @@ type DeploymentSnapshot struct {
 	// AvgMemUtilizationPct is the mean memory utilisation across pods (% of requests).
 	// -1 when no memory requests are set.
 	AvgMemUtilizationPct int32
+
+	// AvgRPS is the mean requests-per-second per pod, queried from Prometheus.
+	// -1 when Prometheus is not configured or the query failed.
+	AvgRPS int32
 }
 
-// Collector fetches resource metrics from the Kubernetes Metrics Server.
+// Collector fetches resource metrics from the Kubernetes Metrics Server and,
+// optionally, request-rate metrics from Prometheus.
 type Collector struct {
-	k8sClient client.Client
+	k8sClient     client.Client
 	metricsClient versioned.Interface
+	promClient    *prometheus.Client // nil if RPS scraping is not configured
 }
 
-func New(c client.Client, mc versioned.Interface) *Collector {
-    return &Collector{k8sClient: c, metricsClient: mc}
+// New returns a Collector. promClient may be nil; in that case AvgRPS is always -1.
+func New(c client.Client, mc versioned.Interface, pc *prometheus.Client) *Collector {
+	return &Collector{k8sClient: c, metricsClient: mc, promClient: pc}
 }
 
 // Collect returns a DeploymentSnapshot for all running pods matching selector.
+// deploymentName is used to build the per-pod RPS PromQL query.
 func (c *Collector) Collect(
 	ctx context.Context,
 	namespace string,
+	deploymentName string,
 	selector labels.Selector,
 ) (*DeploymentSnapshot, error) {
 
 	snap := &DeploymentSnapshot{
 		AvgCPUUtilizationPct: -1,
 		AvgMemUtilizationPct: -1,
+		AvgRPS:               -1,
 	}
 
 	if err := c.collectResourceMetrics(ctx, namespace, selector, snap); err != nil {
 		return snap, fmt.Errorf("resource metrics: %w", err)
 	}
 
+	c.collectRPS(ctx, namespace, deploymentName, snap)
+
 	return snap, nil
 }
 
 // collectResourceMetrics populates CPU/Mem fields in the snapshot by iterating
-// over all running pods and fetching their PodMetrics via a List call (avoids
-// the watch cache which metrics.k8s.io does not support).
+// over all running pods and fetching their PodMetrics via a List call.
 func (c *Collector) collectResourceMetrics(
 	ctx context.Context,
 	namespace string,
@@ -66,7 +78,6 @@ func (c *Collector) collectResourceMetrics(
 	snap *DeploymentSnapshot,
 ) error {
 
-	// List running pods matching the deployment selector.
 	podList := &corev1.PodList{}
 	if err := c.k8sClient.List(ctx, podList,
 		client.InNamespace(namespace),
@@ -75,23 +86,11 @@ func (c *Collector) collectResourceMetrics(
 		return fmt.Errorf("listing pods: %w", err)
 	}
 
-	logger := log.FromContext(ctx)
-    logger.Info("DEBUG pods found", "count", len(podList.Items))
-    for _, p := range podList.Items {
-        logger.Info("DEBUG pod", "name", p.Name, "phase", p.Status.Phase)
-    }
-
 	pmList, err := c.metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("listing pod metrics: %w", err)
 	}
 
-	logger.Info("DEBUG pod metrics found", "count", len(pmList.Items))
-    for _, pm := range pmList.Items {
-        logger.Info("DEBUG podmetric", "name", pm.Name)
-    }
-
-	// Build a name → PodMetrics lookup map for O(1) access.
 	pmMap := make(map[string]metricsv1beta1.PodMetrics, len(pmList.Items))
 	for _, pm := range pmList.Items {
 		pmMap[pm.Name] = pm
@@ -113,17 +112,14 @@ func (c *Collector) collectResourceMetrics(
 
 		pm, ok := pmMap[pod.Name]
 		if !ok {
-			// Metrics not yet available for this pod (e.g. just started). Skip.
 			continue
 		}
 
-		// Sum usage across all containers in this pod.
 		for _, cm := range pm.Containers {
 			totalCPUMilli += cm.Usage.Cpu().MilliValue()
 			totalMemBytes += cm.Usage.Memory().Value()
 		}
 
-		// Sum resource requests (needed for % utilisation calculation).
 		for _, ctr := range pod.Spec.Containers {
 			if q, ok := ctr.Resources.Requests[corev1.ResourceCPU]; ok {
 				totalCPUReq += q.MilliValue()
@@ -149,4 +145,29 @@ func (c *Collector) collectResourceMetrics(
 	}
 
 	return nil
+}
+
+// collectRPS asks Prometheus for the per-pod request rate of this deployment,
+// averaged across pods. Leaves AvgRPS at -1 if Prometheus is not configured or
+// the query fails (the scaler treats -1 as "metric inactive").
+func (c *Collector) collectRPS(
+	ctx context.Context,
+	namespace, deploymentName string,
+	snap *DeploymentSnapshot,
+) {
+	if c.promClient == nil {
+		return
+	}
+	logger := log.FromContext(ctx)
+
+	query := fmt.Sprintf(
+		`avg(sum by (pod) (rate(http_server_requests_seconds_count{namespace=%q,pod=~%q}[1m])))`,
+		namespace, deploymentName+"-.*",
+	)
+	val, err := c.promClient.Query(ctx, query)
+	if err != nil {
+		logger.Error(err, "prometheus RPS query failed; treating as inactive")
+		return
+	}
+	snap.AvgRPS = int32(val)
 }

@@ -20,13 +20,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/metrics"
+	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/prometheus"
 	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/scaler"
 )
 
 // Options are passed from main to SetupWithManager.
 type Options struct {
-	SyncPeriod time.Duration
-	MetricsClient metricsclient.Interface
+	SyncPeriod       time.Duration
+	MetricsClient    metricsclient.Interface
+	PrometheusClient *prometheus.Client
 }
 
 // DeploymentReconciler reconciles Deployments that carry the autoscaler opt-in label.
@@ -44,7 +46,7 @@ type DeploymentReconciler struct {
 func SetupWithManager(mgr manager.Manager, opts Options) error {
 	r := &DeploymentReconciler{
 		client:         mgr.GetClient(),
-		collector: 		metrics.New(mgr.GetClient(), opts.MetricsClient),
+		collector:      metrics.New(mgr.GetClient(), opts.MetricsClient, opts.PrometheusClient),
 		scaleUpTimes:   make(map[string]time.Time),
 		scaleDownTimes: make(map[string]time.Time),
 	}
@@ -108,6 +110,7 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	snap, metricsErr := r.collector.Collect(
 		ctx,
 		req.Namespace,
+		dep.Name,
 		podSelector,
 	)
 	if metricsErr != nil {
@@ -124,6 +127,7 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		"pods", snap.PodCount,
 		"avgCPU", snap.AvgCPUUtilizationPct,
 		"avgMem", snap.AvgMemUtilizationPct,
+		"avgRPS", snap.AvgRPS,
 	)
 
 	// --- 4. Make scaling decision ---
@@ -146,11 +150,14 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		CPUEnabled:           cfg.CPUEnabled,
 		CPUScaleUpPct:        cfg.CPUScaleUpPct,
 		CPUScaleDownPct:      cfg.CPUScaleDownPct,
-		MemEnabled:           cfg.MemEnabled,
-		MemScaleUpPct:        cfg.MemScaleUpPct,
-		MemScaleDownPct:      cfg.MemScaleDownPct,
-		Snapshot:             snap,
-		Now:                  time.Now(),
+		MemEnabled:            cfg.MemEnabled,
+		MemScaleUpPct:         cfg.MemScaleUpPct,
+		MemScaleDownPct:       cfg.MemScaleDownPct,
+		RPSEnabled:            cfg.RPSEnabled,
+		RPSScaleUpThreshold:   cfg.RPSScaleUpThreshold,
+		RPSScaleDownThreshold: cfg.RPSScaleDownThreshold,
+		Snapshot:              snap,
+		Now:                   time.Now(),
 	})
 
 	logger.Info("scaling decision", "decision", decision.String())

@@ -86,6 +86,10 @@ type Input struct {
 	MemScaleUpPct   int32
 	MemScaleDownPct int32
 
+	RPSEnabled            bool
+	RPSScaleUpThreshold   int32
+	RPSScaleDownThreshold int32
+
 	// Observed values (use -1 to signal "not available")
 	Snapshot *metrics.DeploymentSnapshot
 
@@ -153,6 +157,22 @@ func Evaluate(in Input) Decision {
 		}
 	}
 
+	// --- Requests per second ---
+	if in.RPSEnabled && snap.AvgRPS >= 0 {
+		activeMetrics++
+		obs := snap.AvgRPS
+		switch {
+		case obs >= in.RPSScaleUpThreshold:
+			scaleUpReasons = append(scaleUpReasons, Reason{
+				Metric:    "RPS",
+				Observed:  fmt.Sprintf("%d r/s", obs),
+				Threshold: fmt.Sprintf(">=%d r/s", in.RPSScaleUpThreshold),
+			})
+		case obs < in.RPSScaleDownThreshold:
+			belowDownCount++
+		}
+	}
+
 	// --- Scale UP decision ---
 	if len(scaleUpReasons) > 0 {
 		if in.CurrentReplicas >= in.MaxReplicas {
@@ -201,10 +221,6 @@ func Evaluate(in Input) Decision {
 			}},
 		}
 	}
-
-	// At the bottom of Evaluate(), before the final return:
-	fmt.Printf("DEBUG evaluate: activeMetrics=%d belowDownCount=%d cpuEnabled=%v cpuObs=%d cpuDownPct=%d\n",
-    activeMetrics, belowDownCount, in.CPUEnabled, snap.AvgCPUUtilizationPct, in.CPUScaleDownPct)
 
 	return Decision{Direction: Hold, DesiredReplicas: in.CurrentReplicas}
 }

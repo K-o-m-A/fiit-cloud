@@ -31,19 +31,19 @@ Add a single label to opt in, then tune with annotations:
 ```yaml
 metadata:
   labels:
-    autoscaler.yourorg.io/enabled: "true"   # ← opt-in
+    autoscaler.fiit-cloud.io/enabled: "true"   # ← opt-in
 
   annotations:
-    autoscaler.yourorg.io/min-replicas: "2"
-    autoscaler.yourorg.io/max-replicas: "20"
+    autoscaler.fiit-cloud.io/min-replicas: "2"
+    autoscaler.fiit-cloud.io/max-replicas: "20"
 
     # CPU (% of requests)
-    autoscaler.yourorg.io/cpu-scale-up-threshold:   "75"
-    autoscaler.yourorg.io/cpu-scale-down-threshold: "25"
+    autoscaler.fiit-cloud.io/cpu-scale-up-threshold:   "75"
+    autoscaler.fiit-cloud.io/cpu-scale-down-threshold: "25"
 
     # Memory (% of requests)
-    autoscaler.yourorg.io/mem-scale-up-threshold:   "80"
-    autoscaler.yourorg.io/mem-scale-down-threshold: "30"
+    autoscaler.fiit-cloud.io/mem-scale-up-threshold:   "80"
+    autoscaler.fiit-cloud.io/mem-scale-down-threshold: "30"
 
 ```
 
@@ -79,7 +79,7 @@ Full annotation reference: [`pkg/controller/labels.go`](pkg/controller/labels.go
 
 ```bash
 # 1. Build the image
-make docker-build docker-push IMAGE=yourorg/autoscaler-operator TAG=v1.0.0
+make docker-build docker-push IMAGE=fiit-cloud/autoscaler-operator TAG=v1.0.0
 
 # 2. Deploy the operator
 make deploy

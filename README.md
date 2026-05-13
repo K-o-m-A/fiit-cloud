@@ -209,7 +209,7 @@ make port-forward-quote-app
 - updates `deployment.spec.replicas` through the controller reconciliation loop
 
 ### How It Works
-1. A Deployment is marked for autoscaling with `autoscaler.yourorg.io/enabled: "true"`
+1. A Deployment is marked for autoscaling with `autoscaler.fiit-cloud.io/enabled: "true"`
 2. The operator reads the current CPU and memory utilisation for that workload
 3. The scaler applies the configured thresholds and replica limits
 4. The reconciler patches the Deployment when scaling is needed
@@ -236,14 +236,14 @@ You can tune autoscaling behavior with annotations on each Deployment:
 ```yaml
 metadata:
 	labels:
-		autoscaler.yourorg.io/enabled: "true"
+		autoscaler.fiit-cloud.io/enabled: "true"
 	annotations:
-		autoscaler.yourorg.io/min-replicas: "2"
-		autoscaler.yourorg.io/max-replicas: "20"
-		autoscaler.yourorg.io/cpu-scale-up-threshold: "75"
-		autoscaler.yourorg.io/cpu-scale-down-threshold: "25"
-		autoscaler.yourorg.io/mem-scale-up-threshold: "80"
-		autoscaler.yourorg.io/mem-scale-down-threshold: "30"
+		autoscaler.fiit-cloud.io/min-replicas: "2"
+		autoscaler.fiit-cloud.io/max-replicas: "20"
+		autoscaler.fiit-cloud.io/cpu-scale-up-threshold: "75"
+		autoscaler.fiit-cloud.io/cpu-scale-down-threshold: "25"
+		autoscaler.fiit-cloud.io/mem-scale-up-threshold: "80"
+		autoscaler.fiit-cloud.io/mem-scale-down-threshold: "30"
 ```
 
 Important note:
@@ -259,19 +259,19 @@ make install-autoscaler-operator
 
 Run configuration command:
 ```bash
-kubectl label deployment quote-app -n apps autoscaler.yourorg.io/enabled=true --overwrite
+kubectl label deployment quote-app -n apps autoscaler.fiit-cloud.io/enabled=true --overwrite
 
 kubectl annotate deployment quote-app -n apps \
-  autoscaler.yourorg.io/min-replicas=1 \
-  autoscaler.yourorg.io/max-replicas=5 \
-  autoscaler.yourorg.io/scale-up-step=1 \
-  autoscaler.yourorg.io/scale-down-step=1 \
-  autoscaler.yourorg.io/cpu-enabled=true \
-  autoscaler.yourorg.io/cpu-scale-up-threshold=75 \
-  autoscaler.yourorg.io/cpu-scale-down-threshold=25 \
-  autoscaler.yourorg.io/mem-enabled=true \
-  autoscaler.yourorg.io/mem-scale-up-threshold=80 \
-  autoscaler.yourorg.io/mem-scale-down-threshold=60 \
+  autoscaler.fiit-cloud.io/min-replicas=1 \
+  autoscaler.fiit-cloud.io/max-replicas=5 \
+  autoscaler.fiit-cloud.io/scale-up-step=1 \
+  autoscaler.fiit-cloud.io/scale-down-step=1 \
+  autoscaler.fiit-cloud.io/cpu-enabled=true \
+  autoscaler.fiit-cloud.io/cpu-scale-up-threshold=75 \
+  autoscaler.fiit-cloud.io/cpu-scale-down-threshold=25 \
+  autoscaler.fiit-cloud.io/mem-enabled=true \
+  autoscaler.fiit-cloud.io/mem-scale-up-threshold=80 \
+  autoscaler.fiit-cloud.io/mem-scale-down-threshold=60 \
   --overwrite
 ```
 
