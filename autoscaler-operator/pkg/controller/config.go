@@ -7,8 +7,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 )
 
-// DeploymentConfig is the parsed scaling configuration derived from a
-// Deployment's labels and annotations.
 type DeploymentConfig struct {
 	MinReplicas int32
 	MaxReplicas int32
@@ -32,8 +30,6 @@ type DeploymentConfig struct {
 	RPSScaleDownThreshold int32
 }
 
-// ParseDeploymentConfig reads annotations from a Deployment and returns the
-// resolved configuration with safe defaults.
 func ParseDeploymentConfig(d *appsv1.Deployment) (*DeploymentConfig, error) {
 	ann := d.Annotations
 	if ann == nil {
@@ -42,7 +38,7 @@ func ParseDeploymentConfig(d *appsv1.Deployment) (*DeploymentConfig, error) {
 
 	cfg := &DeploymentConfig{
 		MinReplicas:          getInt32(ann, AnnotationMinReplicas, 1),
-		MaxReplicas:          getInt32(ann, AnnotationMaxReplicas, 0), // 0 = not set
+		MaxReplicas:          getInt32(ann, AnnotationMaxReplicas, 0),
 		ScaleUpStep:          getInt32(ann, AnnotationScaleUpStep, 1),
 		ScaleDownStep:        getInt32(ann, AnnotationScaleDownStep, 1),
 		ScaleUpCooldownSec:   getInt64(ann, AnnotationScaleUpCooldown, 60),
@@ -89,8 +85,6 @@ func (c *DeploymentConfig) validate(name string) error {
 	}
 	return nil
 }
-
-// --- helpers ---
 
 func getInt32(ann map[string]string, key string, def int32) int32 {
 	v, ok := ann[key]

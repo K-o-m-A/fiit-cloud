@@ -24,25 +24,20 @@ import (
 	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/scaler"
 )
 
-// Options are passed from main to SetupWithManager.
 type Options struct {
 	SyncPeriod       time.Duration
 	MetricsClient    metricsclient.Interface
 	PrometheusClient *prometheus.Client
 }
 
-// DeploymentReconciler reconciles Deployments that carry the autoscaler opt-in label.
 type DeploymentReconciler struct {
 	client    client.Client
 	collector *metrics.Collector
 
-	// scaleUpTimes and scaleDownTimes track the last scaling event per Deployment
-	// (namespace/name key) for cooldown enforcement.
 	scaleUpTimes   map[string]time.Time
 	scaleDownTimes map[string]time.Time
 }
 
-// SetupWithManager registers the reconciler and a Watch on labeled Deployments.
 func SetupWithManager(mgr manager.Manager, opts Options) error {
 	r := &DeploymentReconciler{
 		client:         mgr.GetClient(),
@@ -51,7 +46,6 @@ func SetupWithManager(mgr manager.Manager, opts Options) error {
 		scaleDownTimes: make(map[string]time.Time),
 	}
 
-	// Only reconcile Deployments that carry our opt-in label.
 	labelSelector := predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		v, ok := obj.GetLabels()[LabelEnabled]
 		return ok && v == "true"
@@ -62,18 +56,14 @@ func SetupWithManager(mgr manager.Manager, opts Options) error {
 		Complete(r)
 }
 
-// Reconcile is called by controller-runtime whenever a labeled Deployment changes
-// or the sync period elapses.
 func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues(
 		"deployment", req.NamespacedName,
 	)
 
-	// --- 1. Fetch the Deployment ---
 	dep := &appsv1.Deployment{}
 	if err := r.client.Get(ctx, req.NamespacedName, dep); err != nil {
 		if errors.IsNotFound(err) {
-			// Deployment deleted; clean up our in-memory cooldown state.
 			key := req.NamespacedName.String()
 			delete(r.scaleUpTimes, key)
 			delete(r.scaleDownTimes, key)
@@ -82,17 +72,14 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return reconcile.Result{}, fmt.Errorf("fetching deployment: %w", err)
 	}
 
-	// Honour DeletionTimestamp – skip reconciliation for terminating objects.
 	if !dep.DeletionTimestamp.IsZero() {
 		return reconcile.Result{}, nil
 	}
 
-	// --- 2. Parse annotation-driven configuration ---
 	cfg, err := ParseDeploymentConfig(dep)
 	if err != nil {
 		logger.Error(err, "invalid autoscaler configuration; skipping")
 		r.emitEvent(ctx, dep, corev1.EventTypeWarning, "InvalidConfig", err.Error())
-		// Don't requeue automatically – user must fix the annotation.
 		return reconcile.Result{}, nil
 	}
 
@@ -101,7 +88,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		"cpuEnabled", cfg.CPUEnabled, "memEnabled", cfg.MemEnabled,
 	)
 
-	// --- 3. Collect metrics ---
 	podSelector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("building pod selector: %w", err)
@@ -114,7 +100,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		podSelector,
 	)
 	if metricsErr != nil {
-		// Log but continue; we may still be able to make a decision with partial data.
 		logger.Error(metricsErr, "partial metrics collection error")
 	}
 
@@ -130,7 +115,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		"avgRPS", snap.AvgRPS,
 	)
 
-	// --- 4. Make scaling decision ---
 	key := req.NamespacedName.String()
 	currentReplicas := int32(1)
 	if dep.Spec.Replicas != nil {
@@ -162,7 +146,6 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 
 	logger.Info("scaling decision", "decision", decision.String())
 
-	// --- 5. Apply the decision ---
 	if decision.Direction == scaler.Hold {
 		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 	}
@@ -190,17 +173,13 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-// applyScale patches the Deployment's replica count using a strategic merge patch.
 func (r *DeploymentReconciler) applyScale(ctx context.Context, dep *appsv1.Deployment, desired int32) error {
 	patch := client.MergeFrom(dep.DeepCopy())
 	dep.Spec.Replicas = &desired
 	return r.client.Patch(ctx, dep, patch)
 }
 
-// emitEvent records a Kubernetes Event on the Deployment for observability.
 func (r *DeploymentReconciler) emitEvent(ctx context.Context, dep *appsv1.Deployment, eventType, reason, msg string) {
-	// controller-runtime provides an event recorder via the manager; for simplicity
-	// we use direct Event object creation here.
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "autoscaler-",
@@ -223,11 +202,9 @@ func (r *DeploymentReconciler) emitEvent(ctx context.Context, dep *appsv1.Deploy
 		LastTimestamp:  metav1.Now(),
 		Count:          1,
 	}
-	// Best-effort – ignore errors.
 	_ = r.client.Create(ctx, event)
 }
 
-// labelSelectorToLabelsSelector is a utility for tests.
 func labelSelectorToLabelsSelector(s *metav1.LabelSelector) (labels.Selector, error) {
 	return metav1.LabelSelectorAsSelector(s)
 }

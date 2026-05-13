@@ -14,39 +14,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// DeploymentSnapshot is the aggregated metric reading for a single reconcile cycle.
 type DeploymentSnapshot struct {
-	// Number of running pods metrics were collected from.
 	PodCount int
 
-	// AvgCPUUtilizationPct is the mean CPU utilisation across pods (% of requests).
-	// -1 when no CPU requests are set.
 	AvgCPUUtilizationPct int32
 
-	// AvgMemUtilizationPct is the mean memory utilisation across pods (% of requests).
-	// -1 when no memory requests are set.
 	AvgMemUtilizationPct int32
 
-	// AvgRPS is the mean requests-per-second per pod, queried from Prometheus.
-	// -1 when Prometheus is not configured or the query failed.
 	AvgRPS int32
 }
 
-// Collector fetches resource metrics from the Kubernetes Metrics Server and,
-// optionally, request-rate metrics from Prometheus.
 type Collector struct {
 	k8sClient     client.Client
 	metricsClient versioned.Interface
-	promClient    *prometheus.Client // nil if RPS scraping is not configured
+	promClient    *prometheus.Client
 }
 
-// New returns a Collector. promClient may be nil; in that case AvgRPS is always -1.
 func New(c client.Client, mc versioned.Interface, pc *prometheus.Client) *Collector {
 	return &Collector{k8sClient: c, metricsClient: mc, promClient: pc}
 }
 
-// Collect returns a DeploymentSnapshot for all running pods matching selector.
-// deploymentName is used to build the per-pod RPS PromQL query.
 func (c *Collector) Collect(
 	ctx context.Context,
 	namespace string,
@@ -62,8 +49,6 @@ func (c *Collector) Collect(
 
 	resourceErr := c.collectResourceMetrics(ctx, namespace, selector, snap)
 
-	// PodCount must reflect running pods even when metrics-server is unavailable,
-	// so RPS-only scaling can proceed.
 	if snap.PodCount == 0 {
 		if n, err := c.countRunningPods(ctx, namespace, selector); err == nil {
 			snap.PodCount = n
@@ -78,9 +63,6 @@ func (c *Collector) Collect(
 	return snap, nil
 }
 
-// countRunningPods returns the number of Running pods matching selector.
-// Used as a fallback when metrics-server is not installed so that RPS-only
-// scaling can still make decisions.
 func (c *Collector) countRunningPods(
 	ctx context.Context,
 	namespace string,
@@ -102,8 +84,6 @@ func (c *Collector) countRunningPods(
 	return n, nil
 }
 
-// collectResourceMetrics populates CPU/Mem fields in the snapshot by iterating
-// over all running pods and fetching their PodMetrics via a List call.
 func (c *Collector) collectResourceMetrics(
 	ctx context.Context,
 	namespace string,
@@ -180,9 +160,6 @@ func (c *Collector) collectResourceMetrics(
 	return nil
 }
 
-// collectRPS asks Prometheus for the per-pod request rate of this deployment,
-// averaged across pods. Leaves AvgRPS at -1 if Prometheus is not configured or
-// the query fails (the scaler treats -1 as "metric inactive").
 func (c *Collector) collectRPS(
 	ctx context.Context,
 	namespace, deploymentName string,

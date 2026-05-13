@@ -85,7 +85,7 @@ func TestScaleUp_StepSize(t *testing.T) {
 	in.ScaleUpStep = 3
 	in.Snapshot.AvgCPUUtilizationPct = 90
 	d := scaler.Evaluate(in)
-	if d.DesiredReplicas != 5 { // 2 + 3
+	if d.DesiredReplicas != 5 {
 		t.Errorf("expected 5 replicas with step=3, got %d", d.DesiredReplicas)
 	}
 }
@@ -96,7 +96,7 @@ func TestScaleUp_StepClampedToMax(t *testing.T) {
 	in.ScaleUpStep = 3
 	in.Snapshot.AvgCPUUtilizationPct = 90
 	d := scaler.Evaluate(in)
-	if d.DesiredReplicas != 10 { // capped at max
+	if d.DesiredReplicas != 10 {
 		t.Errorf("expected 10 (capped), got %d", d.DesiredReplicas)
 	}
 }
@@ -104,7 +104,7 @@ func TestScaleUp_StepClampedToMax(t *testing.T) {
 func TestScaleUp_CooldownBlocks(t *testing.T) {
 	in := baseInput()
 	in.Snapshot.AvgCPUUtilizationPct = 90
-	in.LastScaleUpTime = baseNow.Add(-30 * time.Second) // 30s ago, cooldown is 60s
+	in.LastScaleUpTime = baseNow.Add(-30 * time.Second)
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.Hold {
 		t.Errorf("expected Hold (cooldown), got %s: %s", d.Direction, d)
@@ -114,7 +114,7 @@ func TestScaleUp_CooldownBlocks(t *testing.T) {
 func TestScaleUp_CooldownExpired(t *testing.T) {
 	in := baseInput()
 	in.Snapshot.AvgCPUUtilizationPct = 90
-	in.LastScaleUpTime = baseNow.Add(-90 * time.Second) // 90s ago, cooldown is 60s
+	in.LastScaleUpTime = baseNow.Add(-90 * time.Second)
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.ScaleUp {
 		t.Errorf("expected ScaleUp after cooldown expiry, got %s", d.Direction)
@@ -136,8 +136,8 @@ func TestScaleDown_AllMetricsLow(t *testing.T) {
 
 func TestScaleDown_OnlyOneLow_NoAction(t *testing.T) {
 	in := baseInput()
-	in.Snapshot.AvgCPUUtilizationPct = 10 // low
-	in.Snapshot.AvgMemUtilizationPct = 50 // normal
+	in.Snapshot.AvgCPUUtilizationPct = 10
+	in.Snapshot.AvgMemUtilizationPct = 50
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.Hold {
 		t.Errorf("expected Hold (mixed metrics), got %s", d.Direction)
@@ -159,7 +159,7 @@ func TestScaleDown_CooldownBlocks(t *testing.T) {
 	in := baseInput()
 	in.Snapshot.AvgCPUUtilizationPct = 5
 	in.Snapshot.AvgMemUtilizationPct = 5
-	in.LastScaleDownTime = baseNow.Add(-100 * time.Second) // 100s ago, cooldown=300s
+	in.LastScaleDownTime = baseNow.Add(-100 * time.Second)
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.Hold {
 		t.Errorf("expected Hold (down cooldown), got %s", d.Direction)
@@ -177,10 +177,9 @@ func TestNoSnapshot_Hold(t *testing.T) {
 
 func TestMixedMetrics_CPUHighMemLow_ScalesUp(t *testing.T) {
 	in := baseInput()
-	in.Snapshot.AvgCPUUtilizationPct = 90 // triggers scale-up
-	in.Snapshot.AvgMemUtilizationPct = 5  // would trigger scale-down alone
+	in.Snapshot.AvgCPUUtilizationPct = 90
+	in.Snapshot.AvgMemUtilizationPct = 5
 	d := scaler.Evaluate(in)
-	// Scale-up takes precedence over scale-down
 	if d.Direction != scaler.ScaleUp {
 		t.Errorf("expected ScaleUp (CPU high wins), got %s: %s", d.Direction, d)
 	}
@@ -191,7 +190,7 @@ func rpsInput() scaler.Input {
 	in.RPSEnabled = true
 	in.RPSScaleUpThreshold = 50
 	in.RPSScaleDownThreshold = 5
-	in.Snapshot.AvgRPS = 20 // between thresholds → no pressure
+	in.Snapshot.AvgRPS = 20
 	return in
 }
 
@@ -219,7 +218,7 @@ func TestScaleDown_CPUMemLowButRPSMid_Holds(t *testing.T) {
 	in := rpsInput()
 	in.Snapshot.AvgCPUUtilizationPct = 10
 	in.Snapshot.AvgMemUtilizationPct = 10
-	in.Snapshot.AvgRPS = 20 // not below scale-down threshold
+	in.Snapshot.AvgRPS = 20
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.Hold {
 		t.Errorf("expected Hold (RPS keeps it active), got %s: %s", d.Direction, d)
@@ -228,7 +227,7 @@ func TestScaleDown_CPUMemLowButRPSMid_Holds(t *testing.T) {
 
 func TestRPSInactive_FallsBackToCPUMem(t *testing.T) {
 	in := rpsInput()
-	in.Snapshot.AvgRPS = -1 // Prometheus unreachable
+	in.Snapshot.AvgRPS = -1
 	in.Snapshot.AvgCPUUtilizationPct = 10
 	in.Snapshot.AvgMemUtilizationPct = 10
 	d := scaler.Evaluate(in)
@@ -238,7 +237,7 @@ func TestRPSInactive_FallsBackToCPUMem(t *testing.T) {
 }
 
 func TestRPSDisabled_IgnoresRPS(t *testing.T) {
-	in := baseInput() // RPSEnabled is false by default in baseInput()
+	in := baseInput()
 	in.Snapshot.AvgRPS = 9999
 	d := scaler.Evaluate(in)
 	if d.Direction != scaler.Hold {

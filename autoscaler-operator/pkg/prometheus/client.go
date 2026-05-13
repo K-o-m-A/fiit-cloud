@@ -1,5 +1,3 @@
-// Package prometheus is a thin HTTP client for the Prometheus instant-query API.
-// It is intentionally minimal: one method, no external deps beyond stdlib.
 package prometheus
 
 import (
@@ -13,15 +11,11 @@ import (
 	"time"
 )
 
-// Client queries a Prometheus server via /api/v1/query.
 type Client struct {
 	baseURL string
 	http    *http.Client
 }
 
-// New returns a Client targeting baseURL, e.g.
-// "http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090".
-// A trailing slash is tolerated.
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -29,8 +23,6 @@ func New(baseURL string) *Client {
 	}
 }
 
-// Query runs an instant PromQL query and returns the first scalar value.
-// Empty result is reported as 0 (no traffic observed, not an error).
 func (c *Client) Query(ctx context.Context, query string) (float64, error) {
 	u, err := url.Parse(c.baseURL + "/api/v1/query")
 	if err != nil {

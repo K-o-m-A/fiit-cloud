@@ -1,6 +1,3 @@
-// Package scaler contains the pure scaling decision logic.
-// It is intentionally free of Kubernetes client dependencies so it can be
-// unit-tested without a real or fake cluster.
 package scaler
 
 import (
@@ -11,13 +8,12 @@ import (
 	"github.com/K-o-m-A/fiit-cloud/autoscaler-operator/pkg/metrics"
 )
 
-// Direction is the outcome of an Evaluate call.
 type Direction int
 
 const (
-	Hold      Direction = iota // No change needed.
-	ScaleUp                    // Increase replicas.
-	ScaleDown                  // Decrease replicas.
+	Hold      Direction = iota
+	ScaleUp
+	ScaleDown
 )
 
 func (d Direction) String() string {
@@ -31,7 +27,6 @@ func (d Direction) String() string {
 	}
 }
 
-// Reason captures why a particular direction was chosen.
 type Reason struct {
 	Metric    string
 	Observed  string
@@ -42,7 +37,6 @@ func (r Reason) String() string {
 	return fmt.Sprintf("%s observed=%s threshold=%s", r.Metric, r.Observed, r.Threshold)
 }
 
-// Decision is the fully resolved output of Evaluate.
 type Decision struct {
 	Direction       Direction
 	DesiredReplicas int32
@@ -60,24 +54,19 @@ func (d Decision) String() string {
 	return fmt.Sprintf("%s → %d replicas [%s]", d.Direction, d.DesiredReplicas, strings.Join(parts, "; "))
 }
 
-// Input bundles everything Evaluate needs.
 type Input struct {
-	// Current state
 	CurrentReplicas   int32
 	LastScaleUpTime   time.Time
 	LastScaleDownTime time.Time
 
-	// Bounds & steps
 	MinReplicas   int32
 	MaxReplicas   int32
 	ScaleUpStep   int32
 	ScaleDownStep int32
 
-	// Cooldowns
 	ScaleUpCooldownSec   int64
 	ScaleDownCooldownSec int64
 
-	// Thresholds
 	CPUEnabled      bool
 	CPUScaleUpPct   int32
 	CPUScaleDownPct int32
@@ -90,19 +79,11 @@ type Input struct {
 	RPSScaleUpThreshold   int32
 	RPSScaleDownThreshold int32
 
-	// Observed values (use -1 to signal "not available")
 	Snapshot *metrics.DeploymentSnapshot
 
-	// Now is injected for testability.
 	Now time.Time
 }
 
-// Evaluate returns the scaling Decision for the given Input.
-// Rules:
-//  1. If ANY metric is above its scale-up threshold → ScaleUp (unless at max or in cooldown).
-//  2. If ALL active metrics are below their scale-down threshold → ScaleDown
-//     (unless at min or in cooldown).
-//  3. Otherwise → Hold.
 func Evaluate(in Input) Decision {
 	if in.Now.IsZero() {
 		in.Now = time.Now()
@@ -125,7 +106,6 @@ func Evaluate(in Input) Decision {
 		activeMetrics  int
 	)
 
-	// --- CPU ---
 	if in.CPUEnabled && snap.AvgCPUUtilizationPct >= 0 {
 		activeMetrics++
 		obs := snap.AvgCPUUtilizationPct
@@ -141,7 +121,6 @@ func Evaluate(in Input) Decision {
 		}
 	}
 
-	// --- Memory ---
 	if in.MemEnabled && snap.AvgMemUtilizationPct >= 0 {
 		activeMetrics++
 		obs := snap.AvgMemUtilizationPct
@@ -157,7 +136,6 @@ func Evaluate(in Input) Decision {
 		}
 	}
 
-	// --- Requests per second ---
 	if in.RPSEnabled && snap.AvgRPS >= 0 {
 		activeMetrics++
 		obs := snap.AvgRPS
@@ -173,7 +151,6 @@ func Evaluate(in Input) Decision {
 		}
 	}
 
-	// --- Scale UP decision ---
 	if len(scaleUpReasons) > 0 {
 		if in.CurrentReplicas >= in.MaxReplicas {
 			return Decision{Direction: Hold, DesiredReplicas: in.MaxReplicas,
@@ -194,7 +171,6 @@ func Evaluate(in Input) Decision {
 		return Decision{Direction: ScaleUp, DesiredReplicas: desired, Reasons: scaleUpReasons}
 	}
 
-	// --- Scale DOWN decision: ALL active metrics must be below their down threshold ---
 	if activeMetrics > 0 && belowDownCount == activeMetrics {
 		if in.CurrentReplicas <= in.MinReplicas {
 			return Decision{Direction: Hold, DesiredReplicas: in.MinReplicas}
