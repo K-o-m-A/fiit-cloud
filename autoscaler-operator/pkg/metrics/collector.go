@@ -60,13 +60,46 @@ func (c *Collector) Collect(
 		AvgRPS:               -1,
 	}
 
-	if err := c.collectResourceMetrics(ctx, namespace, selector, snap); err != nil {
-		return snap, fmt.Errorf("resource metrics: %w", err)
+	resourceErr := c.collectResourceMetrics(ctx, namespace, selector, snap)
+
+	// PodCount must reflect running pods even when metrics-server is unavailable,
+	// so RPS-only scaling can proceed.
+	if snap.PodCount == 0 {
+		if n, err := c.countRunningPods(ctx, namespace, selector); err == nil {
+			snap.PodCount = n
+		}
 	}
 
 	c.collectRPS(ctx, namespace, deploymentName, snap)
 
+	if resourceErr != nil {
+		return snap, fmt.Errorf("resource metrics: %w", resourceErr)
+	}
 	return snap, nil
+}
+
+// countRunningPods returns the number of Running pods matching selector.
+// Used as a fallback when metrics-server is not installed so that RPS-only
+// scaling can still make decisions.
+func (c *Collector) countRunningPods(
+	ctx context.Context,
+	namespace string,
+	selector labels.Selector,
+) (int, error) {
+	podList := &corev1.PodList{}
+	if err := c.k8sClient.List(ctx, podList,
+		client.InNamespace(namespace),
+		client.MatchingLabelsSelector{Selector: selector},
+	); err != nil {
+		return 0, err
+	}
+	n := 0
+	for i := range podList.Items {
+		if podList.Items[i].Status.Phase == corev1.PodRunning {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // collectResourceMetrics populates CPU/Mem fields in the snapshot by iterating

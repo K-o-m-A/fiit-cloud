@@ -364,12 +364,112 @@ kubectl get nodes
 At the time of writing, the SAV OpenStack environment exhibits slow disk I/O that causes the `kubeadm init` step to fail intermittently, which is why the project is primarily demonstrated on a local Minikube cluster.
 ---
 
-## 6. Experiment UPDATE - UPRAVIŤ AJ V3ETKY TEXTY O EXPERIMENTE
+## 6. Experiment
 
+### 6.1 Experiment 1 — Scaling based on requests per second
 
+This experiment exercises the operator in its RPS-only configuration. CPU and memory signals are explicitly disabled (`cpu-enabled=false`, `mem-enabled=false`), so the only input that can move `spec.replicas` is the per-pod request rate observed by Prometheus. The goal is to demonstrate that the operator reacts to traffic itself rather than to any second-order resource pressure it might cause, which is the property that distinguishes our implementation from the stock HPA in its default CPU-only mode.
 
-### 6.5 Observations and discussion
+#### 6.1.1 Goal and pass criteria
 
-Beyond the numeric metrics, the experiment also provides qualitative insight into how the operator behaves under load. By tailing the operator's log in real time, one can read off the precise reason that triggered each scaling decision: each log line emitted at scale-up or scale-down time contains a serialized `Decision` that lists the metrics involved, the observed values, and the thresholds that were crossed. Kubernetes events recorded on the deployment provide a more durable trail of the same information and can be retrieved at any time with `kubectl describe deploy quote-app -n apps`. Together, the log and the event stream are sufficient to reconstruct the entire history of an experiment and to diagnose any unexpected behavior.
+The experiment is considered successful when all four properties below hold:
 
-UPDATE = PRIDAŤ NIEČO O EXPERIMENTE
+1. The replica count increases within sixty seconds of the moment the per-pod RPS crosses the configured `rps-scale-up-threshold`.
+2. Once load is removed and the configured `scale-down-cooldown` elapses, the replica count returns to `min-replicas=1`.
+3. The replica count never leaves the `[min-replicas, max-replicas] = [1, 5]` interval.
+4. No oscillation occurs — a scale-up is never immediately followed by a scale-down on the same workload while load is still present.
+
+#### 6.1.2 Setup
+
+The operator is configured through annotations on the `quote-app` deployment in the `apps` namespace. The thresholds are deliberately low so that a single `busybox` load generator is enough to push the system past the scale-up threshold:
+
+| Annotation | Value |
+|---|---|
+| `min-replicas` | `1` |
+| `max-replicas` | `5` |
+| `scale-up-step` / `scale-down-step` | `1` / `1` |
+| `scale-up-cooldown` / `scale-down-cooldown` | `30 s` / `60 s` |
+| `cpu-enabled` | `false` |
+| `mem-enabled` | `false` |
+| `rps-enabled` | `true` |
+| `rps-scale-up-threshold` | `10` req/s per pod |
+| `rps-scale-down-threshold` | `2` req/s per pod |
+
+Per-pod RPS is computed from the application's own `http_server_requests_seconds_count` counter, scraped every fifteen seconds by `kube-prometheus-stack` through the `ServiceMonitor` shipped with the `quote-app` chart. The operator queries Prometheus with:
+
+```promql
+avg(sum by (pod) (rate(http_server_requests_seconds_count{namespace="apps",pod=~"quote-app-.*"}[1m])))
+```
+
+The whole procedure is automated by `requestLoadTest.sh` in the repository root, which configures the annotations, drives the load generator, polls Prometheus, and prints a timestamped trace to `rps-experiment-<timestamp>.log`.
+
+#### 6.1.3 Running the experiment
+
+The experiment is launched with a single shell script and does not require any in-cluster cooperation beyond a port-forward into Prometheus, which is the channel through which the script reads the RPS metric. The full sequence from a freshly installed cluster is:
+
+```bash
+# 1. Make Prometheus reachable on http://localhost:9090
+kubectl port-forward -n monitoring svc/prometheus-stack-kube-prom-prometheus 9090:9090 &
+
+# 2. Run the experiment from the repository root
+./requestLoadTest.sh
+```
+
+The script writes the same trace it prints to stdout into a file named `rps-experiment-YYYYMMDD-HHMMSS.log` in the current directory, and the path is echoed in the final summary block. The script is idempotent — re-running it overwrites the annotations on `quote-app`, deletes any leftover `load-gen` pod from a previous run, and starts from a clean baseline. A `trap` on exit removes the load generator even when the script is interrupted, so a partial run will not leave artificial traffic flowing.
+
+Two optional knobs are available without editing the script:
+
+- `PROM_URL` — override the Prometheus endpoint, useful when the port-forward is bound to a different local port. Example: `PROM_URL=http://localhost:9091 ./requestLoadTest.sh`.
+- The autoscaler annotations applied by the script can be tightened or relaxed beforehand with `kubectl annotate deployment quote-app -n apps ...`; subsequent invocations of the script will overwrite them, so any custom values should be re-applied between runs.
+
+While the script is executing it is informative to open two extra terminals, one tailing the operator log and one watching the deployment, to correlate the script's RPS samples with the operator's `scaling decision` entries and the resulting replica changes:
+
+```bash
+kubectl logs -n autoscaler-system deploy/autoscaler-operator -f | grep -E "scaling decision|scaled up|scaled down"
+kubectl get deploy quote-app -n apps -w
+```
+
+#### 6.1.4 Procedure
+
+The script proceeds through five phases:
+
+1. **Preflight** — confirm the deployment exists and that Prometheus is reachable at `http://localhost:9090` (the port-forward into the `monitoring` namespace).
+2. **Baseline (30 s)** — record replica count and RPS with no synthetic load. Background RPS comes only from the in-cluster Spring Boot actuator probe traffic and should be a small fraction of one request per second.
+3. **Apply load** — start a single `busybox` pod that hits `http://quote-app:8080/quote` in a tight loop and wait for it to become Ready.
+4. **Watch scale-up (max 180 s)** — sample replicas and RPS every ten seconds until the deployment either reaches `max-replicas=5` or the deadline elapses; record the time of the first scale-up event.
+5. **Stop load and watch scale-down (max 600 s)** — delete the load generator and continue sampling until replicas drop back to `min-replicas=1`.
+
+#### 6.1.5 Results
+
+The trace below was produced with the patched operator on a fresh `fiit-cloud` Minikube cluster on 2026-05-13. Only the rows where the replica count changes are shown — the full sampling trace is in `rps-experiment-20260513-161348.log`.
+
+| Phase | t (s) | Replicas | Avg RPS / pod | Event |
+|---|---|---|---|---|
+| Baseline | 0 → 21 | 1 | ≈ 0.2 | — |
+| Scale-up | 10 | 1 | 149.7 | RPS crosses scale-up threshold |
+| Scale-up | **20** | **1 → 2** | 517.3 | **first scale-up** |
+| Scale-up | 51 | 2 → 3 | 701.0 | scale-up cooldown elapsed |
+| Scale-up | 81 | 3 → 4 | 163.7 | scale-up cooldown elapsed |
+| Scale-up | 112 | 4 → 5 | 128.8 | reached `max-replicas` |
+| Load off | — | 5 | — | load generator deleted |
+| Scale-down | 60 | 5 → 4 | 0.2 | RPS below scale-down threshold |
+| Scale-down | 121 | 4 → 3 | 0.3 | scale-down cooldown elapsed |
+| Scale-down | 197 | 3 → 2 | 0.3 | scale-down cooldown elapsed |
+| Scale-down | 257 | 2 → 1 | 0.3 | back to `min-replicas` |
+
+The four pass criteria from Section 6.1.1 are all met:
+
+- **Reaction time** — first scale-up occurred 20 s after load was applied, well under the 60 s budget.
+- **Return to baseline** — replicas dropped from 5 back to 1 in 257 s once load was removed, gated by the 60 s scale-down cooldown between each step (5→4→3→2→1, four steps × ≈ 60 s = ≈ 240 s plus initial detection lag).
+- **Bounds respected** — replica count stayed within `[1, 5]` throughout; the operator stopped at 5 even while RPS remained high.
+- **No oscillation** — scale-up events occurred only while load was present and scale-down events only after it was removed; the directions never reversed within a single phase.
+
+#### 6.1.6 Discussion
+
+A few qualitative observations are worth recording. The first is that the per-pod RPS visibly *decreases* as replicas are added — from ≈ 700 req/s per pod at two replicas down to ≈ 130 req/s per pod at five — because the same client load is being spread across more pods by the Kubernetes service. This is the behavior that justifies measuring *per-pod* rather than *total* RPS: the scale-up threshold is a property of a single pod's capacity, and the scale-down threshold fires correctly once the load is gone regardless of how many pods existed at that moment.
+
+The second observation concerns the scale-down trajectory. With a sixty-second `scale-down-cooldown` and a step size of one, scaling from five back to one takes at least four cooldown windows — the observed 257 s matches this lower bound almost exactly. Operators that want a faster recovery should either increase `scale-down-step` or shorten the cooldown; the trade-off is increased sensitivity to short-lived dips in traffic.
+
+The third observation is operational. Beyond the numeric metrics, the experiment provides qualitative insight into how the operator behaves under load. By tailing the operator's log in real time, one can read off the precise reason that triggered each scaling decision: each log line emitted at scale-up or scale-down time contains a serialized `Decision` that lists the metrics involved, the observed values, and the thresholds that were crossed. Kubernetes events recorded on the deployment provide a more durable trail of the same information and can be retrieved at any time with `kubectl describe deploy quote-app -n apps`. Together, the log and the event stream are sufficient to reconstruct the entire history of an experiment and to diagnose any unexpected behavior.
+
+A final note on a defect discovered while preparing this experiment: the original metrics collector aborted the entire snapshot when `metrics.k8s.io` was unavailable, which left `PodCount=0` and prevented the RPS path from running even when CPU/memory were disabled. The collector was patched to compute `PodCount` from the running pod list as a fallback and to query Prometheus independently of the resource-metrics path. The results above were obtained with the patched operator.

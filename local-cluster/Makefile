@@ -37,6 +37,9 @@ QUOTE_APP_RELEASE	:= quote-app
 QUOTE_APP_CHART		:= ../quote-app/helm/quote-app
 QUOTE_APP_NAMESPACE	:= apps
 
+DASHBOARD_FILE      := ../dashboard-config.json
+DASHBOARD_CM        := quote-app-dashboard
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
   DETECTED_OS := windows
@@ -88,7 +91,7 @@ MINIKUBE_URL_WINDOWS := https://github.com/kubernetes/minikube/releases/latest/d
 # ==============================================================================
 
 .PHONY: all
-all: install start-cluster install-prometheus-stack install-autoscaler-operator install-quote-app ## Full setup: install tools → start cluster → install Prometheus stack and autoscaler-operator
+all: install start-cluster install-prometheus-stack install-dashboard install-autoscaler-operator install-quote-app ## Full setup: install tools → start cluster → install Prometheus stack and autoscaler-operator
 	@echo ""
 	@echo "=========================================="
 	@echo " ✅  fiit-cloud is ready!"
@@ -262,7 +265,7 @@ status: ## Show cluster, node, and monitoring pod status
 # ==============================================================================
 
 .PHONY: install-prometheus-stack
-install-prometheus-stack: ## Install kube-prometheus-stack 
+install-prometheus-stack: ## Install kube-prometheus-stack and provision the quote-app dashboard
 	@echo ">>> Adding Helm repo '$(HELM_REPO_NAME)'..."
 	@helm repo add $(HELM_REPO_NAME) $(HELM_REPO_URL) 2>/dev/null || true
 	@helm repo update
@@ -281,6 +284,28 @@ install-prometheus-stack: ## Install kube-prometheus-stack
 		--wait \
 		--timeout=10m
 	@echo "  ✔ kube-prometheus-stack installed in namespace '$(NAMESPACE)'"
+	@$(MAKE) --no-print-directory install-dashboard
+
+.PHONY: install-dashboard
+install-dashboard: ## Provision the quote-app Grafana dashboard via the kube-prometheus-stack sidecar
+	@echo ">>> Provisioning Grafana dashboard from '$(DASHBOARD_FILE)'..."
+	@if [ ! -f "$(DASHBOARD_FILE)" ]; then \
+		echo "  ✗ $(DASHBOARD_FILE) not found"; exit 1; \
+	fi
+	@kubectl create configmap $(DASHBOARD_CM) \
+		--namespace $(NAMESPACE) \
+		--from-file=quote-app.json=$(DASHBOARD_FILE) \
+		--dry-run=client -o yaml \
+		| kubectl apply -f -
+	@kubectl label configmap $(DASHBOARD_CM) \
+		--namespace $(NAMESPACE) \
+		grafana_dashboard=1 --overwrite >/dev/null
+	@echo "  ✔ dashboard ConfigMap '$(DASHBOARD_CM)' applied; sidecar will import it within ~30s"
+
+.PHONY: uninstall-dashboard
+uninstall-dashboard: ## Remove the quote-app Grafana dashboard ConfigMap
+	@kubectl delete configmap $(DASHBOARD_CM) --namespace $(NAMESPACE) --ignore-not-found
+	@echo "  ✔ dashboard ConfigMap removed"
 
 .PHONY: upgrade-prometheus-stack
 upgrade-prometheus-stack:

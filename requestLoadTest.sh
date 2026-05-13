@@ -1,34 +1,133 @@
-echo "=== Phase 1: baseline (5s) ==="
-  sleep 5
-  kubectl get deploy quote-app -n apps -o jsonpath='replicas={.status.replicas}{"\n"}'
+#!/usr/bin/env bash
+# requestLoadTest.sh - drive quote-app with HTTP load and verify RPS-based autoscaling.
+#
+# Operator scaling signal: RPS only. CPU and memory are disabled via annotations.
+# This script mirrors TESTING.md scenario A (Section 6.1) plus the load test in 6.4.
+#
+# Prerequisites:
+#   - autoscaler-operator running in autoscaler-system namespace
+#   - quote-app deployment running in apps namespace
+#   - Prometheus reachable at $PROM_URL (default http://localhost:9090):
+#       kubectl port-forward -n monitoring svc/prometheus-stack-kube-prom-prometheus 9090:9090 &
+#   - python3 on PATH (used to parse Prometheus JSON)
 
-  echo "=== Phase 2: applying load ==="
-  kubectl run load-gen --image=busybox:1.28 --restart=Never -n apps -- \
-    /bin/sh -c "while true; do wget -q -O- http://quote-app:8080/quote; done"
+set -euo pipefail
 
-  echo "=== Phase 3: watching scale-UP ==="
-  START=$SECONDS
-  while [ $((SECONDS-START)) -lt 180 ]; do
-    R=$(kubectl get deploy quote-app -n apps -o jsonpath='{.status.replicas}')
-    RPS=$(curl -sG http://localhost:9090/api/v1/query \
-          --data-urlencode 'query=avg(sum by (pod) (rate(http_server_requests_seconds_count{namespace="apps",pod=~"quote-app-.*"}[1m])))' \
-          | python3 -c "import json,sys; d=json.load(sys.stdin); r=d['data']['result']; print(round(float(r[0]['value'][1]),1) if r else 0)")
-    printf "  t=%3ds replicas=%s RPS=%s\n" "$((SECONDS-START))" "$R" "$RPS"
-    [ "$R" = "5" ] && echo "  → reached max, breaking" && break
-    sleep 10
-  done
+NS="apps"
+DEPLOY="quote-app"
+PROM_URL="${PROM_URL:-http://localhost:9090}"
+LOG="rps-experiment-$(date +%Y%m%d-%H%M%S).log"
 
-  echo "=== Phase 4: stopping load ==="
-  kubectl delete pod load-gen -n apps --now
+exec > >(tee "$LOG") 2>&1
 
-  echo "=== Phase 5: watching scale-DOWN ==="
-  START=$SECONDS
-  while [ $((SECONDS-START)) -lt 360 ]; do
-    R=$(kubectl get deploy quote-app -n apps -o jsonpath='{.status.replicas}')
-    RPS=$(curl -sG http://localhost:9090/api/v1/query \
-          --data-urlencode 'query=avg(sum by (pod) (rate(http_server_requests_seconds_count{namespace="apps",pod=~"quote-app-.*"}[1m])))' \
-          | python3 -c "import json,sys; d=json.load(sys.stdin); r=d['data']['result']; print(round(float(r[0]['value'][1]),1) if r else 0)")
-    printf "  t=%3ds replicas=%s RPS=%s\n" "$((SECONDS-START))" "$R" "$RPS"
-    [ "$R" = "1" ] && echo "  → back to min, done" && break
-    sleep 10
-  done
+cleanup() {
+  echo ">>> cleanup: removing load-gen pod"
+  kubectl delete pod load-gen -n "$NS" --now --ignore-not-found >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+# --- Preflight ----------------------------------------------------------------
+echo "=== Preflight ==="
+kubectl get deploy "$DEPLOY" -n "$NS" >/dev/null
+if ! curl -sf "$PROM_URL/-/ready" >/dev/null; then
+  echo "Prometheus not reachable at $PROM_URL"
+  echo "  Hint: kubectl port-forward -n monitoring svc/prometheus-stack-kube-prom-prometheus 9090:9090 &"
+  exit 1
+fi
+echo "  ok: deployment found, Prometheus reachable"
+
+# --- Configure operator: RPS only (TESTING.md scenario A) --------------------
+echo "=== Configuring autoscaler: RPS-only ==="
+kubectl label deployment "$DEPLOY" -n "$NS" --overwrite \
+  autoscaler.fiit-cloud.io/enabled=true >/dev/null
+
+kubectl annotate deployment "$DEPLOY" -n "$NS" --overwrite \
+  autoscaler.fiit-cloud.io/min-replicas=1 \
+  autoscaler.fiit-cloud.io/max-replicas=5 \
+  autoscaler.fiit-cloud.io/scale-up-step=1 \
+  autoscaler.fiit-cloud.io/scale-down-step=1 \
+  autoscaler.fiit-cloud.io/scale-up-cooldown=30 \
+  autoscaler.fiit-cloud.io/scale-down-cooldown=60 \
+  autoscaler.fiit-cloud.io/cpu-enabled=false \
+  autoscaler.fiit-cloud.io/mem-enabled=false \
+  autoscaler.fiit-cloud.io/rps-enabled=true \
+  autoscaler.fiit-cloud.io/rps-scale-up-threshold=10 \
+  autoscaler.fiit-cloud.io/rps-scale-down-threshold=2 >/dev/null
+echo "  rps-scale-up=10  rps-scale-down=2  min=1  max=5  step=1  cooldown=30/60s"
+
+# --- Prometheus helper --------------------------------------------------------
+RPS_QUERY='avg(sum by (pod) (rate(http_server_requests_seconds_count{namespace="apps",pod=~"quote-app-.*"}[1m])))'
+
+query_prom() {
+  local q="$1"
+  curl -sG "$PROM_URL/api/v1/query" --data-urlencode "query=$q" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); r=d['data']['result']; print(round(float(r[0]['value'][1]),1) if r else 0)" \
+    2>/dev/null || echo "0"
+}
+
+snap() {
+  local elapsed="$1"
+  local r rps
+  r=$(kubectl get deploy "$DEPLOY" -n "$NS" -o jsonpath='{.status.replicas}')
+  rps=$(query_prom "$RPS_QUERY")
+  printf "  t=%4ds  replicas=%s  RPS=%s\n" "$elapsed" "$r" "$rps"
+}
+
+# --- Phase 1: baseline --------------------------------------------------------
+echo "=== Phase 1: baseline (30s, no load) ==="
+START=$SECONDS
+while [ $((SECONDS-START)) -lt 30 ]; do
+  snap "$((SECONDS-START))"
+  sleep 10
+done
+
+# --- Phase 2: apply load ------------------------------------------------------
+echo "=== Phase 2: applying load ==="
+kubectl delete pod load-gen -n "$NS" --now --ignore-not-found >/dev/null 2>&1 || true
+kubectl run load-gen --image=busybox:1.28 --restart=Never -n "$NS" -- \
+  /bin/sh -c "while true; do wget -q -O- http://quote-app:8080/quote >/dev/null; done"
+kubectl wait --for=condition=Ready pod/load-gen -n "$NS" --timeout=60s >/dev/null
+
+# --- Phase 3: watch scale-up --------------------------------------------------
+echo "=== Phase 3: watching scale-UP (max 180s) ==="
+UP_START=$SECONDS
+FIRST_SCALE_AT=""
+while [ $((SECONDS-UP_START)) -lt 180 ]; do
+  r=$(kubectl get deploy "$DEPLOY" -n "$NS" -o jsonpath='{.status.replicas}')
+  if [ -z "$FIRST_SCALE_AT" ] && [ "$r" -gt 1 ]; then
+    FIRST_SCALE_AT=$((SECONDS-UP_START))
+    echo "  *** first scale-up after ${FIRST_SCALE_AT}s ***"
+  fi
+  snap "$((SECONDS-UP_START))"
+  if [ "$r" = "5" ]; then
+    echo "  -> reached max replicas, stopping scale-up watch"
+    break
+  fi
+  sleep 10
+done
+
+# --- Phase 4: stop load -------------------------------------------------------
+echo "=== Phase 4: stopping load ==="
+kubectl delete pod load-gen -n "$NS" --now --ignore-not-found >/dev/null
+
+# --- Phase 5: watch scale-down ------------------------------------------------
+echo "=== Phase 5: watching scale-DOWN (max 600s) ==="
+DOWN_START=$SECONDS
+while [ $((SECONDS-DOWN_START)) -lt 600 ]; do
+  r=$(kubectl get deploy "$DEPLOY" -n "$NS" -o jsonpath='{.status.replicas}')
+  snap "$((SECONDS-DOWN_START))"
+  if [ "$r" = "1" ]; then
+    echo "  -> back to min replicas, done"
+    break
+  fi
+  sleep 15
+done
+
+# --- Summary ------------------------------------------------------------------
+echo "=== Summary ==="
+echo "  First scale-up : ${FIRST_SCALE_AT:-N/A}s after load applied"
+echo "  Log file       : $LOG"
+echo "  Recent events  :"
+kubectl get events -n "$NS" --sort-by=.lastTimestamp \
+  --field-selector reason=ScaledUp,reason=ScaledDown 2>/dev/null \
+  | tail -10 || true
